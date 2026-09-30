@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#202127" />
+    <meta
+      name="description"
+      content="Orbit brings your projects, work, and people into focus."
+    />
+    <title>Orbit · Work in focus</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <div class="boot-screen">
+        <div class="orbit-mark large" aria-hidden="true"></div>
+        <p>Finding your orbit…</p>
+      </div>
+    </div>
+    <div
+      id="toast-region"
+      class="toast-region"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    ></div>
+    <dialog id="modal" aria-labelledby="modal-title"></dialog>
+    <dialog id="confirm-modal" aria-labelledby="confirm-title"></dialog>
+    <noscript
+      ><div class="noscript">
+        Orbit needs JavaScript to load your workspace. Enable it and refresh
+        this page.
+      </div></noscript
+    >
+  </body>
+</html>

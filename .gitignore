@@ -17,3 +17,7 @@ work/
 *.jar
 verification/
 docs/CONTRACT.md
+node_modules/
+playwright-report/
+test-results/
+coverage/

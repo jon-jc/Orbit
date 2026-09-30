@@ -1,0 +1,21 @@
+spring:
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+server:
+  servlet:
+    session:
+      cookie:
+        secure: ${ORBIT_SESSION_SECURE:true}
+management:
+  server:
+    port: 9091
+    address: 127.0.0.1
+orbit:
+  demo:
+    enabled: false
+logging:
+  structured:
+    format:
+      console: ecs

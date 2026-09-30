@@ -1,0 +1,62 @@
+spring:
+  application:
+    name: orbit
+  profiles:
+    default: local
+  datasource:
+    hikari:
+      maximum-pool-size: 12
+      minimum-idle: 2
+      connection-timeout: 10000
+  flyway:
+    enabled: true
+    validate-on-migrate: true
+  session:
+    jdbc:
+      initialize-schema: never
+      cleanup-cron: '0 */5 * * * *'
+server:
+  port: ${PORT:8080}
+  shutdown: graceful
+  error:
+    include-message: never
+    include-stacktrace: never
+  servlet:
+    session:
+      timeout: 8h
+      cookie:
+        name: ORBIT_SESSION
+        http-only: true
+        same-site: lax
+        secure: ${ORBIT_SESSION_SECURE:false}
+  tomcat:
+    max-http-form-post-size: 64KB
+    threads:
+      max: 100
+  max-http-request-header-size: 16KB
+spring.lifecycle.timeout-per-shutdown-phase: 30s
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+  metrics:
+    tags:
+      application: orbit
+orbit:
+  demo:
+    enabled: false
+  auth:
+    rate-limit-enabled: true
+logging:
+  level:
+    root: INFO
+    com.orbit: INFO

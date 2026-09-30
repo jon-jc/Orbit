@@ -1,0 +1,2442 @@
+openapi: 3.1.0
+info:
+  title: Orbit API
+  version: 1.0.0
+  description: Same-origin, session-authenticated project workspace. Mutations require CSRF, including
+    public authentication operations. Required text is nonblank, domain/display-name text rejects U+0000,
+    API payloads are capped at 64 KiB. Owners manage team/settings/invitations; owners/members edit projects/tasks
+    and add comments; viewers read/export. IDs are scoped to membership; inaccessible workspaces return
+    404.
+servers:
+- url: /
+tags:
+- name: Authentication
+- name: Account
+- name: Workspaces
+- name: Team
+- name: Projects
+- name: Tasks
+- name: Activity
+- name: Invitations
+- name: Notifications
+paths:
+  /api/auth/csrf:
+    get:
+      operationId: getCsrf
+      tags:
+      - Authentication
+      summary: Create/get session-bound CSRF token
+      security: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Csrf'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '500':
+          $ref: '#/components/responses/Problem500'
+  /api/auth/config:
+    get:
+      operationId: getAuthConfig
+      tags:
+      - Authentication
+      summary: Read enabled authentication features
+      security: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthConfig'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '500':
+          $ref: '#/components/responses/Problem500'
+  /api/auth/me:
+    get:
+      operationId: getCurrentUser
+      tags:
+      - Authentication
+      summary: Read current authenticated user
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '500':
+          $ref: '#/components/responses/Problem500'
+  /api/auth/register:
+    post:
+      operationId: registerAccount
+      tags:
+      - Authentication
+      summary: Register without automatic sign-in
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      description: Public operation requires the anonymous session cookie and CSRF token issued by GET
+        /api/auth/csrf; no authenticated account is required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Register'
+  /api/auth/login:
+    post:
+      operationId: login
+      tags:
+      - Authentication
+      summary: Authenticate and rotate session ID
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '401':
+          $ref: '#/components/responses/Problem401'
+      description: Public operation requires the anonymous session cookie and CSRF token issued by GET
+        /api/auth/csrf; no authenticated account is required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Login'
+  /api/auth/logout:
+    post:
+      operationId: logout
+      tags:
+      - Authentication
+      summary: Invalidate session
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '204':
+          description: No content
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+  /api/auth/forgot-password:
+    post:
+      operationId: forgotPassword
+      tags:
+      - Authentication
+      summary: Request a password-reset message
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '202':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      description: 'Generic accepted response avoids disclosing whether an account exists. Reset tokens
+        expire after 30 minutes by default; the TTL is configurable.
+
+
+        Public operation requires the anonymous session cookie and CSRF token issued by GET /api/auth/csrf;
+        no authenticated account is required.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailRequest'
+  /api/auth/reset-password:
+    post:
+      operationId: resetPassword
+      tags:
+      - Authentication
+      summary: Consume reset token and replace password
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '204':
+          description: No content
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      description: Public operation requires the anonymous session cookie and CSRF token issued by GET
+        /api/auth/csrf; no authenticated account is required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetPassword'
+  /api/auth/verify-email:
+    post:
+      operationId: verifyEmail
+      tags:
+      - Authentication
+      summary: Consume email-verification token
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '204':
+          description: No content
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      description: Public operation requires the anonymous session cookie and CSRF token issued by GET
+        /api/auth/csrf; no authenticated account is required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+  /api/auth/resend-verification:
+    post:
+      operationId: resendVerification
+      tags:
+      - Authentication
+      summary: Request another verification message
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '202':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      description: Public operation requires the anonymous session cookie and CSRF token issued by GET
+        /api/auth/csrf; no authenticated account is required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailRequest'
+  /api/account:
+    get:
+      operationId: getAccount
+      tags:
+      - Account
+      summary: Read current account profile
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '500':
+          $ref: '#/components/responses/Problem500'
+    patch:
+      operationId: updateAccount
+      tags:
+      - Account
+      summary: Update display name
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAccount'
+  /api/account/password:
+    post:
+      operationId: changePassword
+      tags:
+      - Account
+      summary: Replace password and revoke all sessions
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '204':
+          description: No content
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePassword'
+  /api/account/verification:
+    post:
+      operationId: requestAccountVerification
+      tags:
+      - Account
+      summary: Send verification for current account
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '202':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+  /api/account/sessions:
+    get:
+      operationId: listAccountSessions
+      tags:
+      - Account
+      summary: List up to 100 active sessions, most recently accessed first
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AccountSession'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      description: The opaque row id is a revocation identifier, never the cookie/session credential.
+  /api/account/sessions/{sessionId}:
+    delete:
+      operationId: revokeAccountSession
+      tags:
+      - Account
+      summary: Revoke an actor-owned session
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '204':
+          description: No content
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      description: Unknown or another account's id returns 404. Revoking the current session invalidates
+        its browser authentication.
+  /api/workspaces:
+    get:
+      operationId: listWorkspaces
+      tags:
+      - Workspaces
+      summary: List actor memberships
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Workspace'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '500':
+          $ref: '#/components/responses/Problem500'
+    post:
+      operationId: createWorkspace
+      tags:
+      - Workspaces
+      summary: Create a workspace owned by the actor
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workspace'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkspace'
+  /api/workspaces/{workspaceId}/settings:
+    get:
+      operationId: getWorkspaceSettings
+      tags:
+      - Workspaces
+      summary: Read workspace settings and version
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceSettings'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters: &id001
+      - &id002
+        name: workspaceId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      operationId: updateWorkspaceSettings
+      tags:
+      - Workspaces
+      summary: 'Owner: rename using current version'
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceSettings'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateWorkspace'
+  /api/workspaces/{workspaceId}/members:
+    get:
+      operationId: listMembers
+      tags:
+      - Team
+      summary: Read workspace membership
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Member'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters: *id001
+    post:
+      operationId: addMember
+      tags:
+      - Team
+      summary: 'Owner: add an existing registered account'
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Member'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddMember'
+  /api/workspaces/{workspaceId}/members/{userId}:
+    patch:
+      operationId: updateMemberRole
+      tags:
+      - Team
+      summary: 'Owner: change role'
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Member'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters:
+      - *id002
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMember'
+    delete:
+      operationId: removeMember
+      tags:
+      - Team
+      summary: 'Owner: remove member and clear assignments'
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '204':
+          description: No content
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters:
+      - *id002
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/workspaces/{workspaceId}/projects:
+    get:
+      operationId: listProjects
+      tags:
+      - Projects
+      summary: List project progress
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters: *id001
+    post:
+      operationId: createProject
+      tags:
+      - Projects
+      summary: 'Owner/member: create project'
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProject'
+  /api/workspaces/{workspaceId}/projects/{projectId}:
+    patch:
+      operationId: updateProject
+      tags:
+      - Projects
+      summary: 'Owner/member: update project using current version'
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters:
+      - *id002
+      - name: projectId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProject'
+  /api/workspaces/{workspaceId}/tasks:
+    get:
+      operationId: listTasks
+      tags:
+      - Tasks
+      summary: Search/filter bounded pages
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskPage'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters:
+      - *id002
+      - name: q
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 200
+        description: Literal case-insensitive substring; SQL wildcard characters are ordinary text.
+      - name: status
+        in: query
+        required: false
+        schema: &id013
+          type: string
+          enum:
+          - BACKLOG
+          - TODO
+          - IN_PROGRESS
+          - IN_REVIEW
+          - DONE
+      - name: priority
+        in: query
+        required: false
+        schema: &id014
+          type: string
+          enum:
+          - LOW
+          - MEDIUM
+          - HIGH
+          - URGENT
+      - name: projectId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: assigneeId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+      - name: size
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 50
+    post:
+      operationId: createTask
+      tags:
+      - Tasks
+      summary: 'Owner/member: create task'
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTask'
+  /api/workspaces/{workspaceId}/tasks/{taskId}:
+    get:
+      operationId: getTask
+      tags:
+      - Tasks
+      summary: Read workspace-scoped task
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters: &id003
+      - *id002
+      - &id004
+        name: taskId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      operationId: updateTask
+      tags:
+      - Tasks
+      summary: 'Owner/member: update full editable object'
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters: *id003
+      description: A stale version returns 409; fetch current state before reconciling changes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTask'
+    delete:
+      operationId: deleteTask
+      tags:
+      - Tasks
+      summary: 'Owner/member: permanently delete current task version'
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '204':
+          description: No content
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters:
+      - *id002
+      - *id004
+      - name: version
+        in: query
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+  /api/workspaces/{workspaceId}/tasks/{taskId}/comments:
+    get:
+      operationId: listComments
+      tags:
+      - Tasks
+      summary: Read task discussion
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Comment'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters: *id003
+    post:
+      operationId: createComment
+      tags:
+      - Tasks
+      summary: 'Owner/member: add comment'
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters: *id003
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateComment'
+  /api/workspaces/{workspaceId}/activity:
+    get:
+      operationId: listActivity
+      tags:
+      - Activity
+      summary: Read activity page
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivityPage'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters:
+      - *id002
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+      - name: size
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 30
+  /api/workspaces/{workspaceId}/overview:
+    get:
+      operationId: getOverview
+      tags:
+      - Activity
+      summary: Read counts, project progress, activity and deadlines
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Overview'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters: *id001
+  /api/workspaces/{workspaceId}/export:
+    get:
+      operationId: exportTasks
+      tags:
+      - Tasks
+      summary: Download every workspace task as CSV
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: RFC 4180 data quoting and spreadsheet formula neutralization; independent of UI
+            filters.
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              description: attachment; filename="orbit-tasks.csv"
+          content:
+            text/csv:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters: *id001
+  /api/workspaces/{workspaceId}/invitations:
+    get:
+      operationId: listInvitations
+      tags:
+      - Invitations
+      summary: 'Owner: list 100 latest workspace invitations'
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Invitation'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters: *id001
+    post:
+      operationId: createInvitation
+      tags:
+      - Invitations
+      summary: 'Owner: invite by email'
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invitation'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      parameters: *id001
+      description: Single-use 256-bit token is stored hashed and expires in seven days; delivery uses
+        the durable mail outbox. Requires enabled mail (503 otherwise). Maximum 100 invitations per owner
+        in a rolling day; 429 on excess. Reissue revokes preceding unaccepted invitations for that workspace/email.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateInvitation'
+  /api/workspaces/{workspaceId}/invitations/{invitationId}:
+    delete:
+      operationId: revokeInvitation
+      tags:
+      - Invitations
+      summary: 'Owner: revoke pending invitation'
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '204':
+          description: No content
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters:
+      - *id002
+      - name: invitationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/invitations/preview:
+    get:
+      operationId: previewInvitation
+      tags:
+      - Invitations
+      summary: Preview a valid invitation token
+      security: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationPreview'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '404':
+          $ref: '#/components/responses/Problem404'
+      parameters:
+      - name: token
+        in: query
+        required: true
+        schema: &id005
+          type: string
+          pattern: ^[A-Za-z0-9_-]{43}$
+          description: Opaque single-use token from an email link.
+      description: Omitting the required token parameter returns 400. Invalid/expired/revoked/used tokens
+        or an inviter who is no longer an owner return 404. Possession of the token exposes the intended
+        recipient and workspace name.
+  /api/invitations/accept:
+    post:
+      operationId: acceptInvitation
+      tags:
+      - Invitations
+      summary: Accept invitation for matching account email
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workspace'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+  /api/notifications:
+    get:
+      operationId: listNotifications
+      tags:
+      - Notifications
+      summary: Read actor notifications and unread count
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationPage'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters:
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+      - name: size
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 30
+      description: Only actor-owned notifications for current workspace memberships are visible. Task
+        deletion clears taskId while retaining the notification.
+  /api/notifications/{notificationId}/read:
+    patch:
+      operationId: readNotification
+      tags:
+      - Notifications
+      summary: Mark actor-owned notification read
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '204':
+          description: No content
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '500':
+          $ref: '#/components/responses/Problem500'
+      parameters:
+      - name: notificationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/notifications/read-all:
+    post:
+      operationId: readAllNotifications
+      tags:
+      - Notifications
+      summary: Mark actor notifications read
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      responses:
+        '204':
+          description: No content
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '500':
+          $ref: '#/components/responses/Problem500'
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: ORBIT_SESSION
+      description: HttpOnly, SameSite=Lax server-managed session cookie. GET csrf issues an anonymous
+        session; login rotates it into an authenticated session. Secure in production.
+    csrfToken:
+      type: apiKey
+      in: header
+      name: X-CSRF-TOKEN
+      description: Token from GET /api/auth/csrf. Refresh after login/logout.
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          maxLength: 100
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        emailVerified:
+          type: boolean
+      required:
+      - id
+      - name
+      - email
+      - emailVerified
+    Csrf:
+      type: object
+      properties:
+        token:
+          type: string
+        headerName:
+          type: string
+          examples:
+          - X-CSRF-TOKEN
+      required:
+      - token
+      - headerName
+    AuthConfig:
+      type: object
+      properties:
+        demoEnabled:
+          type: boolean
+        registrationEnabled:
+          type: boolean
+        emailVerificationRequired:
+          type: boolean
+        mailEnabled:
+          type: boolean
+      required:
+      - demoEnabled
+      - registrationEnabled
+      - emailVerificationRequired
+      - mailEnabled
+    Message:
+      type: object
+      properties:
+        message:
+          type: string
+      required:
+      - message
+    AccountSession:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        lastAccessedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        current:
+          type: boolean
+      required:
+      - id
+      - createdAt
+      - lastAccessedAt
+      - expiresAt
+      - current
+    Register:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 12
+          description: At most 72 UTF-8 bytes; required text must be nonblank.
+          maxLength: 72
+      required:
+      - name
+      - email
+      - password
+    Login:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 1
+          maxLength: 72
+      required:
+      - email
+      - password
+    EmailRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+      required:
+      - email
+    TokenRequest:
+      type: object
+      properties:
+        token: *id005
+      required:
+      - token
+    ResetPassword:
+      type: object
+      properties:
+        token: *id005
+        password:
+          type: string
+          minLength: 12
+          description: At most 72 UTF-8 bytes.
+          maxLength: 72
+      required:
+      - token
+      - password
+    UpdateAccount:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+      required:
+      - name
+    ChangePassword:
+      type: object
+      properties:
+        currentPassword:
+          type: string
+          minLength: 1
+          maxLength: 72
+        newPassword:
+          type: string
+          minLength: 12
+          description: At most 72 UTF-8 bytes; changing a password revokes all existing sessions.
+          maxLength: 72
+      required:
+      - currentPassword
+      - newPassword
+    Workspace:
+      type: object
+      properties:
+        id: &id006
+          type: string
+          format: uuid
+        name: &id007
+          type: string
+          maxLength: 100
+        role: &id008
+          type: string
+          enum:
+          - OWNER
+          - MEMBER
+          - VIEWER
+        createdAt: &id009
+          type: string
+          format: date-time
+      required:
+      - id
+      - name
+      - role
+      - createdAt
+    WorkspaceSettings:
+      type: object
+      properties:
+        id: *id006
+        name: *id007
+        role: *id008
+        createdAt: *id009
+        version:
+          type: integer
+          format: int64
+          minimum: 0
+      required:
+      - id
+      - name
+      - role
+      - createdAt
+      - version
+    CreateWorkspace:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+      required:
+      - name
+    UpdateWorkspace:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        version:
+          type: integer
+          format: int64
+          minimum: 0
+      required:
+      - name
+      - version
+    Member:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          maxLength: 100
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        role:
+          type: string
+          enum:
+          - OWNER
+          - MEMBER
+          - VIEWER
+      required:
+      - id
+      - name
+      - email
+      - role
+    AddMember:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        role:
+          type: string
+          enum:
+          - MEMBER
+          - VIEWER
+      required:
+      - email
+      - role
+    UpdateMember:
+      type: object
+      properties:
+        role:
+          type: string
+          enum:
+          - OWNER
+          - MEMBER
+          - VIEWER
+      required:
+      - role
+    Project:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          maxLength: 120
+        description:
+          type: string
+          maxLength: 2000
+        color:
+          type: string
+          pattern: ^#[0-9a-fA-F]{6}$
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - ARCHIVED
+        taskCount:
+          type: integer
+          format: int64
+          minimum: 0
+        completedTaskCount:
+          type: integer
+          format: int64
+          minimum: 0
+        createdAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          format: int64
+          minimum: 0
+      required:
+      - id
+      - name
+      - description
+      - color
+      - status
+      - taskCount
+      - completedTaskCount
+      - createdAt
+      - version
+    CreateProject:
+      type: object
+      properties:
+        name: &id010
+          type: string
+          minLength: 1
+          maxLength: 120
+        description: &id011
+          type:
+          - string
+          - 'null'
+          maxLength: 2000
+        color: &id012
+          type: string
+          pattern: ^#[0-9a-fA-F]{6}$
+      required:
+      - name
+      - color
+    UpdateProject:
+      type: object
+      properties:
+        name: *id010
+        description: *id011
+        color: *id012
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - ARCHIVED
+        version:
+          type: integer
+          format: int64
+          minimum: 0
+      required:
+      - name
+      - color
+      - status
+      - version
+    CreateTask:
+      type: object
+      properties:
+        title: &id015
+          type: string
+          minLength: 1
+          maxLength: 200
+        description: &id016
+          type:
+          - string
+          - 'null'
+          maxLength: 10000
+        projectId: &id017
+          type: string
+          format: uuid
+        status: *id013
+        priority: *id014
+        assigneeId: &id018
+          type:
+          - string
+          - 'null'
+          format: uuid
+        dueDate: &id019
+          type:
+          - string
+          - 'null'
+          format: date
+          description: Calendar date in years 0001–9999; null clears the deadline.
+      required:
+      - title
+      - projectId
+      - status
+      - priority
+    UpdateTask:
+      type: object
+      properties:
+        title: *id015
+        description: *id016
+        projectId: *id017
+        status: *id013
+        priority: *id014
+        assigneeId: *id018
+        dueDate: *id019
+        version:
+          type: integer
+          format: int64
+          minimum: 0
+      required:
+      - title
+      - projectId
+      - status
+      - priority
+      - version
+    Task:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title: *id015
+        description:
+          type: string
+          maxLength: 10000
+        projectId: *id017
+        status: *id013
+        priority: *id014
+        assigneeId: *id018
+        dueDate: *id019
+        projectName:
+          type: string
+          maxLength: 120
+        projectColor:
+          type: string
+          pattern: ^#[0-9a-fA-F]{6}$
+        assigneeName:
+          type:
+          - string
+          - 'null'
+          maxLength: 100
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          format: int64
+          minimum: 0
+        commentCount:
+          type: integer
+          format: int64
+          minimum: 0
+      required:
+      - id
+      - title
+      - description
+      - projectId
+      - status
+      - priority
+      - assigneeId
+      - dueDate
+      - projectName
+      - projectColor
+      - assigneeName
+      - createdAt
+      - updatedAt
+      - version
+      - commentCount
+    Comment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        authorId:
+          type: string
+          format: uuid
+        authorName:
+          type: string
+          maxLength: 100
+        body:
+          type: string
+          maxLength: 4000
+        createdAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - authorId
+      - authorName
+      - body
+      - createdAt
+    CreateComment:
+      type: object
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 4000
+      required:
+      - body
+    Activity:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        actorName:
+          type: string
+          maxLength: 100
+        action:
+          type: string
+          maxLength: 100
+        entityType:
+          type: string
+          maxLength: 30
+        entityName:
+          type: string
+          maxLength: 200
+        createdAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - actorName
+      - action
+      - entityType
+      - entityName
+      - createdAt
+    Overview:
+      type: object
+      properties:
+        totalTasks:
+          type: integer
+          format: int64
+          minimum: 0
+        completedTasks:
+          type: integer
+          format: int64
+          minimum: 0
+        inProgressTasks:
+          type: integer
+          format: int64
+          minimum: 0
+        overdueTasks:
+          type: integer
+          format: int64
+          minimum: 0
+        projects:
+          type: array
+          items:
+            $ref: '#/components/schemas/Project'
+        recentActivity:
+          type: array
+          items:
+            $ref: '#/components/schemas/Activity'
+        upcomingTasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/Task'
+      required:
+      - totalTasks
+      - completedTasks
+      - inProgressTasks
+      - overdueTasks
+      - projects
+      - recentActivity
+      - upcomingTasks
+    Invitation:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        role:
+          type: string
+          enum:
+          - MEMBER
+          - VIEWER
+        status:
+          type: string
+          enum:
+          - PENDING
+          - ACCEPTED
+          - REVOKED
+          - EXPIRED
+        expiresAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - email
+      - role
+      - status
+      - expiresAt
+      - createdAt
+    CreateInvitation:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        role:
+          type: string
+          enum:
+          - MEMBER
+          - VIEWER
+      required:
+      - email
+      - role
+    InvitationPreview:
+      type: object
+      properties:
+        workspaceName:
+          type: string
+          maxLength: 100
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        role:
+          type: string
+          enum:
+          - MEMBER
+          - VIEWER
+        expiresAt:
+          type: string
+          format: date-time
+      required:
+      - workspaceName
+      - email
+      - role
+      - expiresAt
+    Notification:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspaceId:
+          type: string
+          format: uuid
+        workspaceName:
+          type: string
+          maxLength: 100
+        taskId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        type:
+          type: string
+          enum:
+          - ASSIGNED
+          - COMMENT
+          - MEMBERSHIP
+        title:
+          type: string
+          maxLength: 200
+        body:
+          type: string
+          maxLength: 500
+        read:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - workspaceId
+      - workspaceName
+      - taskId
+      - type
+      - title
+      - body
+      - read
+      - createdAt
+    TaskPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Task'
+        page:
+          type: integer
+          format: int64
+          minimum: 0
+        size:
+          type: integer
+          format: int64
+          minimum: 1
+        total:
+          type: integer
+          format: int64
+          minimum: 0
+        totalPages:
+          type: integer
+          format: int64
+          minimum: 0
+      required:
+      - items
+      - page
+      - size
+      - total
+      - totalPages
+    ActivityPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Activity'
+        page:
+          type: integer
+          format: int64
+          minimum: 0
+        size:
+          type: integer
+          format: int64
+          minimum: 1
+        total:
+          type: integer
+          format: int64
+          minimum: 0
+        totalPages:
+          type: integer
+          format: int64
+          minimum: 0
+      required:
+      - items
+      - page
+      - size
+      - total
+      - totalPages
+    NotificationPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Notification'
+        page:
+          type: integer
+          format: int64
+          minimum: 0
+        size:
+          type: integer
+          format: int64
+          minimum: 1
+        total:
+          type: integer
+          format: int64
+          minimum: 0
+        totalPages:
+          type: integer
+          format: int64
+          minimum: 0
+        unreadCount:
+          type: integer
+          format: int64
+          minimum: 0
+      required:
+      - items
+      - page
+      - size
+      - total
+      - totalPages
+      - unreadCount
+    Problem:
+      type: object
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri-reference
+        requestId:
+          type: string
+          format: uuid
+        errors:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+      - status
+      - title
+      - detail
+      - requestId
+  responses:
+    Problem400:
+      description: Invalid request
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Problem401:
+      description: Authentication required or invalid credentials
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Problem403:
+      description: Role, verification policy or CSRF denied
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Problem404:
+      description: Resource missing or inaccessible
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Problem409:
+      description: Duplicate state or optimistic version conflict
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Problem413:
+      description: API body exceeds 64 KiB
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Problem429:
+      description: Authentication or invitation rate limit
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+      headers:
+        Retry-After:
+          schema:
+            type: string
+          description: 'Present for the authentication limiter: seconds to wait before another attempt.'
+    Problem500:
+      description: Unexpected failure; report requestId
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Problem503:
+      description: Email delivery is disabled for invitation creation
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'

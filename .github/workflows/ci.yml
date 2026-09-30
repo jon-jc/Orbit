@@ -16,10 +16,10 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:
           distribution: temurin
           java-version: '17'
@@ -29,7 +29,16 @@ jobs:
         run: ./mvnw -B -ntp verify
       - name: PostgreSQL integration tests with Testcontainers
         run: ./mvnw -B -ntp -Ppostgres-tests verify
-      - uses: actions/setup-node@v4
+      - name: Validate OpenAPI contract
+        run: |
+          python3 -m venv .openapi-venv
+          .openapi-venv/bin/pip install -r api/requirements-validation.txt
+          .openapi-venv/bin/python api/validate.py
+      - name: Verify isolated PostgreSQL backup and restore
+        run: |
+          sh -n scripts/backup.sh scripts/restore.sh scripts/test-recovery.sh
+          sh scripts/test-recovery.sh
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '24'
           cache: npm
@@ -67,8 +76,39 @@ jobs:
         if: always()
         run: docker rm -f orbit-browser-mailpit 2>/dev/null || true
       - name: Build production image
+        id: runtime-image
         run: docker build -t orbit:${{ github.sha }} .
-      - uses: actions/upload-artifact@v4
+      - name: Generate runtime CycloneDX SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          image-ref: orbit:${{ github.sha }}
+          scanners: vuln
+          format: cyclonedx
+          output: runtime.sbom.json
+          exit-code: '0'
+      - name: Gate runtime OS and Java vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          image-ref: orbit:${{ github.sha }}
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          format: json
+          output: runtime-vulnerabilities.json
+          exit-code: '1'
+          skip-setup-trivy: true
+      - name: Preserve runtime security reports
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always() && steps.runtime-image.outcome == 'success'
+        with:
+          name: runtime-security-reports
+          path: |
+            runtime.sbom.json
+            runtime-vulnerabilities.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
           name: test-reports
@@ -83,16 +123,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Review new dependencies for known vulnerabilities
-        uses: actions/dependency-review-action@v5
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
           fail-on-scopes: runtime,development,unknown
           license-check: false
           comment-summary-in-pr: never
 
-  dependencies:
+  owasp-additional:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -100,10 +140,10 @@ jobs:
     steps:
       - name: Report optional full-scan configuration
         if: env.NVD_API_KEY == ''
-        run: echo "::notice::OWASP full dependency scan skipped because NVD_API_KEY is not configured. Pull requests still run native dependency review."
-      - uses: actions/checkout@v4
+        run: echo "::notice::Optional OWASP scan skipped because NVD_API_KEY is not configured. The runtime Trivy scan and SBOM still run without this secret."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: env.NVD_API_KEY != ''
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         if: env.NVD_API_KEY != ''
         with:
           distribution: temurin
@@ -120,7 +160,7 @@ jobs:
           -Dformat=HTML
           -DskipTestScope=true
           -DskipProvidedScope=true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always() && env.NVD_API_KEY != ''
         with:
           name: dependency-security-report

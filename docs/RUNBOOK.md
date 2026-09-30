@@ -3,14 +3,14 @@
 ## Release checklist
 
 - Run `./mvnw verify` and `./mvnw -Ppostgres-tests verify`; the latter uses Docker or a dedicated test database. Confirm tests ran rather than being skipped.
-- Inspect dependency scan findings, update vulnerable packages, and review any narrowly scoped suppression with an expiry.
-- Build the immutable application image; pin tested image digests and action commits for your deployment policy.
-- Use the `prod` profile, secret-injected database credentials, secure cookies, and HTTPS. Keep the application behind a trusted ingress and management endpoints private.
-- Decide whether public registration is acceptable. Add shared signup/login throttling and account lifecycle features appropriate to the product's audience.
-- Restore a representative database backup into an isolated environment and verify sessions, memberships, projects, tasks, comments, and activity. Record recovery time and recovery-point expectations.
+- Inspect the unconditional Trivy runtime OS/Java scan and CycloneDX SBOM. Selected HIGH/CRITICAL findings fail CI, including unfixed findings. Review remaining lower-severity CVEs and alternate-source ratings; Trivy normally prefers distro vendor severity. Update vulnerable packages; do not treat an optional OWASP skip or a successful build as zero vulnerabilities.
+- Build the application image and record/pin its tested digest. CI action sources are pinned to verified official release commits; review Dependabot updates before refreshing them.
+- Use the `prod` profile, secret-injected database credentials, secure cookies, and HTTPS. Set the HTTPS public link origin, SMTP sender/credentials, and a protected 32-byte outbox encryption key. Keep the application behind a trusted ingress and management endpoints private.
+- Decide whether public registration is acceptable with `ORBIT_REGISTRATION_ENABLED`. Add shared signup/login/recovery throttling and controlled email delivery. Account verification, password recovery, and session revocation are implemented; MFA/SSO remain extensions.
+- Restore a representative database backup into isolation and verify memberships, projects, tasks, comments, activity, token state, and encrypted outbox recovery. Recovered sessions are purged by default. Record recovery time and recovery-point expectations.
 - Measure representative workspace sizes and traffic. Set application memory/CPU limits, database connection budgets, ingress body/time limits, and alerts from observed behavior.
 - Verify deployed cookies, session rotation, logout, CSRF rejection, owner/viewer access, and cross-workspace isolation over the real TLS route.
-- Set privacy/retention policies and a plan for account recovery and deletion. The current product does not automate those flows.
+- Set privacy/retention policies and a support plan for accounts with unreachable email addresses. Account/workspace deletion and automated token/security-event/notification retention are not implemented.
 - Keep the previous artifact, a pre-migration backup, and an operator responsible for recovery. A code rollback cannot undo a database migration.
 
 ## HTTPS ingress
@@ -44,6 +44,8 @@ Port 9091 binds to loopback and is not published. A scraper outside the containe
 
 Monitor HTTP error rates/latency, authentication 429 responses, JDBC pool saturation, JVM memory/GC, process restarts, PostgreSQL connections/locks/storage, and backup age. Logs use request IDs; use the response ID when investigating a failed request. Do not log passwords, session cookies, CSRF tokens, or complete sensitive task content.
 
+Monitor mail queue age, `orbit.mail.pending`, `orbit.mail.delivery`, FAILED outbox rows, and SMTP-provider delivery failures. A healthy app does not prove email reached an inbox. The dispatcher retries eight times and SMTP is at least once; duplicate messages can occur after a crash. Review the [account/email guide](ACCOUNT_SECURITY.md) for encryption-key retention, retry behavior, and Mailpit drills.
+
 ## Startup and migration
 
 ```sh
@@ -54,36 +56,48 @@ docker compose logs --tail=200 app
 
 The database must be healthy before the app starts. Flyway applies schema migrations and refuses changed checksums. Do not edit an already applied migration: add a new version. Do not disable validation or run `flyway repair` without understanding and reviewing the exact mismatch. The current startup performs migrations with the runtime credential; it therefore needs appropriate migration privileges. If your policy requires a least-privilege runtime account, introduce a separate approved migration step before removing those permissions.
 
+V3 account security marks historical accounts unverified and invalidates legacy unversioned sessions. The production verification policy requires these users to verify before signing in again. Configure and test SMTP before rollout; there is no automatic bulk verification campaign. V4 creates the encrypted mail outbox; retain its key separately from database backups. V5 adds versioned workspace settings, hashed invitations, and account-scoped notifications.
+
 Plan forward-compatible migrations for rolling upgrades. Back up before schema changes. If the new app fails after migration, diagnose schema compatibility before starting the previous version. Restore into a separate database when feasible, verify it, and deliberately switch traffic. Database rollback can lose writes made after the backup.
 
 ## Backups and restoration
 
 Persistent storage survives ordinary container replacement. `docker compose down -v` deletes the named database volume and must never be part of a routine update. Volume persistence is not a backup.
 
-Use PostgreSQL-native backups, encrypt them, copy them off-host, and define retention. For production use managed point-in-time recovery or a tested WAL archive in addition to logical dumps. The following Linux shell example makes a logical backup from Compose without embedding the password in the command:
+Use PostgreSQL-native backups, encrypt them, copy them off-host, and define retention. For production use managed point-in-time recovery or a tested WAL archive in addition to logical dumps. The executable scripts verify the selected Compose project and create a custom-format archive, validate its catalog, copy it without PowerShell binary redirection, and create a SHA-256 sidecar.
 
-```sh
-mkdir -p backups
-chmod 700 backups
-umask 077
-docker compose exec -T db sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom' > "backups/orbit-$(date -u +%Y%m%dT%H%M%SZ).dump"
+Windows, from the repository root, with the same project name as your running deployment:
+
+```powershell
+.\scripts\backup.ps1 -ProjectName orbit -EnvFile .\.env -BackupDirectory .\backups
+.\scripts\restore.ps1 -BackupFile .\backups\YOUR_BACKUP.dump -Name orbit-restore-drill
 ```
 
-Use a binary-safe shell for the dump redirection. Older Windows PowerShell versions can transform native-command redirected output, so use a verified backup tool or perform the dump inside the container and use `docker cp` on Windows. Protect the resulting files because they contain customer data, password hashes, and sessions.
-
-Restore into a dedicated empty PostgreSQL database with a compatible server version, using a privileged recovery account under operator control:
+Linux/macOS:
 
 ```sh
-# Destination connection settings belong to the isolated recovery environment.
-PGHOST=recovery.internal PGPORT=5432 PGUSER=recovery_operator PGDATABASE=orbit_recovery \
-  pg_restore --no-owner --exit-on-error --dbname=orbit_recovery backup.dump
+chmod +x scripts/backup.sh scripts/restore.sh
+ORBIT_COMPOSE_PROJECT=orbit ORBIT_ENV_FILE="$PWD/.env" ./scripts/backup.sh "$PWD/backups"
+./scripts/restore.sh ./backups/YOUR_BACKUP.dump orbit-restore-drill
 ```
 
-Supply the recovery password through a protected password file or your secret tooling. Do not copy the example with production destination variables unless performing an approved recovery. Check the dump exit status and restoration logs, start the matching Orbit release, and exercise sign-in and domain workflows before changing traffic. A restored session table can revive previously valid sessions; decide whether to clear sessions as part of incident recovery.
+Replace the filename with an actual backup and keep its matching `.sha256`. Restore refuses existing resources, creates a fresh PostgreSQL 17 volume/container, binds the archive read-only, uses no network/published ports, and sets new sessions to read-only transactions. It removes recovered JDBC sessions by default. Source records are untouched. Checksum validation detects corruption, not malicious replacement; only restore trusted archives. Protect files because they contain customer data, password hashes, token hashes, and possibly sessions.
+
+Inspect recovered content through the isolated container:
+
+```sh
+docker exec orbit-restore-drill psql -U orbit_restore -d orbit_restore -c 'SHOW default_transaction_read_only'
+docker exec orbit-restore-drill psql -U orbit_restore -d orbit_restore -c 'SELECT COUNT(*) FROM task'
+docker exec orbit-restore-drill psql -U orbit_restore -d orbit_restore -c 'SELECT COUNT(*) FROM spring_session'
+```
+
+Verify Unicode/multiline content, relations, memberships, assignment/version/deadline state, comments, activity, migrations, and token/outbox policy. Keep SMTP disabled so pending messages are not replayed. Recovery does not automatically promote the database, reconnect a production network, or switch traffic. A privileged operator can deliberately override default read-only transactions; it is a protective default rather than immutable storage.
+
+The [script guide](../scripts/README.md) documents parameters, session-preservation opt-in, exact labeled-resource cleanup, and a Linux CI recovery drill. Before activation, plan outstanding account/invitation tokens, obtain the stable mail encryption key, apply the matching release, verify signed-in operations in isolation, and approve cutover. A code rollback cannot reverse schema changes; restoring an older snapshot loses later writes. Preserve the previous artifact and the pre-migration backup, and measure recovery rather than assuming an objective.
 
 ## Incident checks
 
-**Application will not start:** Confirm `SPRING_PROFILES_ACTIVE=prod`, database variables, DNS/TLS connectivity, Postgres health, and migration logs. Missing configuration should fail rather than select the local database. Avoid repeatedly restarting a crash loop without inspecting its first error.
+**Application will not start:** Confirm `SPRING_PROFILES_ACTIVE=prod`, database variables, absolute HTTPS public origin, SMTP host/from/key when enabled, DNS/TLS connectivity, Postgres health, and migration logs. Enabled verification with registration requires enabled mail. Missing configuration should fail rather than select the local database. Avoid repeatedly restarting a crash loop without inspecting its first error.
 
 **Login returns 429:** The limiter is per remote IP and instance. Proxy traffic can share an address. Check gateway configuration and traffic patterns; use a shared limiter policy rather than globally disabling protection. Tests deliberately disable the local limiter because they repeatedly authenticate from one test address.
 
@@ -93,9 +107,13 @@ Supply the recovery password through a protected password file or your secret to
 
 **Requests return 404:** Validate workspace context, membership, and object IDs. The API intentionally hides inaccessible workspaces with 404.
 
+**Email not received:** A generic 202 or invitation 201 is acceptance, not delivery confirmation. Check `mailEnabled`, outbox status/age, SMTP credentials/TLS/network, the outbox encryption key, and provider quarantine/bounces. Local mail is disabled unless explicitly enabled; use Mailpit for drills. Do not log raw links or resend expired tokens blindly.
+
+**Verification blocks an existing account:** Migration intentionally did not trust historical email addresses. Use the anonymous resend flow and the user's actual mailbox. Plan support recovery for unavailable addresses; the API does not change account email. Do not bulk-mark accounts verified without a reviewed identity-validation policy.
+
 **Database latency/pool exhaustion:** Inspect query latency, active/blocked transactions, storage, and connection counts. The pool is bounded at 12 connections per instance by default. More replicas multiply that demand; do not raise the pool size before checking database capacity and lock contention.
 
-**Suspected credential compromise:** Restrict ingress, preserve logs, revoke affected sessions, rotate relevant secrets, inspect workspace membership/activity, and follow your incident policy. Password reset, per-user session administration, and tamper-proof audit export require product extensions; do not assume the UI supplies them.
+**Suspected credential compromise:** Restrict ingress, preserve logs, use password recovery/change to revoke all account sessions or revoke individual sessions from the account interface, rotate relevant secrets, inspect membership/activity/security events, and follow your incident policy. The API is self-service; it does not provide an operator-wide session-administration console or tamper-proof audit export. Account/invitation tokens and pending mail require a separate reviewed incident policy.
 
 ## Reference deployment limits
 

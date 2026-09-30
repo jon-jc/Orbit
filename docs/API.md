@@ -1,6 +1,6 @@
 # HTTP API
 
-All endpoints are same-origin. Requests and responses use JSON unless export returns CSV. IDs are UUID strings; deadlines use `YYYY-MM-DD`; timestamps are ISO 8601.
+All endpoints are same-origin. Requests and responses use JSON unless export returns CSV. IDs are UUID strings; deadlines use `YYYY-MM-DD`; timestamps are ISO 8601. The machine-readable [OpenAPI 3.1 contract](../api/openapi.yaml) covers 45 operations and can be validated with [api/validate.py](../api/validate.py). It is a checked-in contract, not an automatically generated runtime documentation endpoint.
 
 ## Session protocol
 
@@ -32,13 +32,25 @@ Prefix workspace routes with `/api/workspaces/{workspaceId}`.
 | Method and path | Behavior | Required access |
 | --- | --- | --- |
 | `GET /api/auth/csrf` | Get session CSRF token/header name | Public |
-| `GET /api/auth/config` | Demo-enabled flag | Public |
+| `GET /api/auth/config` | Demo, registration, verification-required, and mail-enabled flags | Public |
 | `POST /api/auth/register` | Create account `{name,email,password}` | Public + CSRF |
 | `POST /api/auth/login` | Sign in `{email,password}` | Public + CSRF |
 | `POST /api/auth/logout` | Invalidate session, 204 | CSRF |
 | `GET /api/auth/me` | Current user | Signed in |
+| `POST /api/auth/forgot-password` | `{email}`; generic 202 message | Public + CSRF |
+| `POST /api/auth/reset-password` | `{token,password}`; 204, revokes all account sessions | Public + CSRF |
+| `POST /api/auth/resend-verification` | `{email}`; generic 202 message | Public + CSRF |
+| `POST /api/auth/verify-email` | `{token}`; 204 | Public + CSRF |
+| `GET /api/account` | Current account | Signed in |
+| `PATCH /api/account` | `{name}`; update display name | Signed in + CSRF |
+| `POST /api/account/password` | `{currentPassword,newPassword}`; 204, revokes all account sessions | Signed in + CSRF |
+| `POST /api/account/verification` | Generic 202 verification message | Signed in + CSRF |
+| `GET /api/account/sessions` | Up to 100 nonexpired account sessions | Signed in |
+| `DELETE /api/account/sessions/{id}` | Revoke an account-owned opaque session-row ID, 204 | Signed in + CSRF |
 | `GET /api/workspaces` | Workspaces the actor belongs to | Signed in |
 | `POST /api/workspaces` | Create workspace `{name}`; creator becomes owner | Signed in + CSRF |
+| `GET /settings` | Workspace name, version, actor role, creation time | Member of workspace |
+| `PATCH /settings` | Rename `{name,version}` | OWNER |
 | `GET /members` | Workspace members | Member of workspace |
 | `POST /members` | Add an existing account `{email,role}` | OWNER |
 | `PATCH /members/{userId}` | Change role `{role}` | OWNER |
@@ -56,6 +68,14 @@ Prefix workspace routes with `/api/workspaces/{workspaceId}`.
 | `GET /activity` | Page activity events | Member of workspace |
 | `GET /overview` | Summary counts, projects, upcoming tasks, activity | Member of workspace |
 | `GET /export` | Download workspace tasks as formula-safe CSV | Member of workspace |
+| `GET /invitations` | Latest 100 invitations, newest first | OWNER |
+| `POST /invitations` | `{email,role}`; email invitation, 201 | OWNER; enabled mail |
+| `DELETE /invitations/{invitationId}` | Revoke an unaccepted invitation, 204 | OWNER |
+| `GET /api/invitations/preview?token=...` | Preview recipient, workspace name, role, expiry | Public token possession |
+| `POST /api/invitations/accept` | `{token}`; workspace membership | Signed in with the invited email + CSRF |
+| `GET /api/notifications` | Paged inbox with unread count | Signed in |
+| `PATCH /api/notifications/{id}/read` | Mark one visible account-owned notification read, 204 | Signed in + CSRF |
+| `POST /api/notifications/read-all` | Mark all currently visible notifications read, 204 | Signed in + CSRF |
 
 All mutations require CSRF. Initial membership creation accepts MEMBER or VIEWER; an owner can subsequently promote another member to OWNER. Self-demotion and deleting an OWNER are rejected with 409.
 
@@ -65,8 +85,10 @@ Task create/edit fields are `title`, `description`, `projectId`, `status`, `prio
 
 | Object | Fields |
 | --- | --- |
-| User | `id`, `name`, `email` |
+| User | `id`, `name`, `email`, `emailVerified` |
+| Account session | `id`, `createdAt`, `lastAccessedAt`, `expiresAt`, `current` |
 | Workspace | `id`, `name`, `role`, `createdAt` |
+| Workspace settings | `id`, `name`, `version`, `role`, `createdAt` |
 | Member | `id`, `name`, `email`, `role` |
 | Project | `id`, `name`, `description`, `color`, `status`, `taskCount`, `completedTaskCount`, `createdAt`, `version` |
 | Task | `id`, `title`, `description`, `projectId`, `projectName`, `projectColor`, `status`, `priority`, `assigneeId`, `assigneeName`, `dueDate`, `createdAt`, `updatedAt`, `version`, `commentCount` |
@@ -74,8 +96,12 @@ Task create/edit fields are `title`, `description`, `projectId`, `status`, `prio
 | Activity | `id`, `actorName`, `action`, `entityType`, `entityName`, `createdAt` |
 | Overview | `totalTasks`, `completedTasks`, `inProgressTasks`, `overdueTasks`, `projects`, `recentActivity`, `upcomingTasks` |
 | Page | `items`, `page`, `size`, `total`, `totalPages` |
+| Invitation | `id`, `email`, `role`, `status`, `expiresAt`, `createdAt` |
+| Invitation preview | `workspaceName`, `email`, `role`, `expiresAt` |
+| Notification | `id`, `workspaceId`, `workspaceName`, `taskId`, `type`, `title`, `body`, `read`, `createdAt` |
+| Inbox | Page fields plus `unreadCount` |
 
-Project color is a six-digit hexadecimal value including `#`, such as `#7367f0`. Version/count/page fields are numbers. Unassigned task `assigneeId` and `assigneeName` are null; a task without a deadline has a null `dueDate`. Required text must be nonblank. Text fields reject U+0000; dates must be valid dates in years 0001–9999.
+Project color is a six-digit hexadecimal value including `#`, such as `#7367f0`. Version/count/page fields are numbers. Unassigned task `assigneeId` and `assigneeName` are null; a task without a deadline has a null `dueDate`. Required text must be nonblank. Domain/display-name text rejects U+0000; dates must be valid dates in years 0001–9999.
 
 | Input | Maximum length |
 | --- | --- |
@@ -100,11 +126,29 @@ Creating a task:
 }
 ```
 
-The server supplies IDs, names, timestamps, counts, and the initial version. Send the complete editable object with that version to PATCH. Create endpoints return 201; successful edits return 200; deletion/logout return 204.
+The server supplies IDs, names, timestamps, counts, and the initial version. Send the complete editable object with that version to PATCH. Create endpoints return 201; successful edits return 200; deletion/logout/password replacement/token consumption return 204. Mail-request endpoints return 202 with `{message}`. Invitation acceptance returns 200 with the workspace.
+
+## Accounts, tokens, and invitations
+
+Account email is immutable. Password replacement requires 12–72 characters and no more than 72 UTF-8 bytes. Change/reset revokes all account sessions, including the current browser; sign in and obtain fresh CSRF afterward. Session-list IDs are opaque revocation row identifiers, never cookie credentials; another account's identifier returns 404. See [account security](ACCOUNT_SECURITY.md) for migration, delivery, and recovery behavior.
+
+Reset links expire after 30 minutes, verification links after 24 hours, invitations after seven days. Tokens are 43-character Base64 URL strings from 256 random bits, single use, and stored as SHA-256 hashes. Mail action links use fragments. Anonymous forgot/resend always return generic 202 messages; this does not guarantee delivery or identical timing. Default per-account/purpose send cooldown is one minute. Invalid/expired/used account-action tokens return 400. Production verification policy can deny sign-in with 403 until verified.
+
+Invitation creation accepts only MEMBER or VIEWER and requires configured mail. An already registered member yields 409; invitations can otherwise target an unregistered email. The owner has a rolling limit of 100 invitations per day. Reissuing for the same workspace/email revokes previous unaccepted invitations. Listing reports PENDING, ACCEPTED, REVOKED, or EXPIRED. Revoking a used/revoked invitation yields 409. Preview/accept deny unavailable/expired/revoked/used tokens with 404; the inviter must still be an owner. Acceptance requires the signed-in email to match the target or returns 403. It does not overwrite an existing member's current role. The token itself is never returned in the invitation-management response.
+
+Workspace rename uses `{name,version}` and returns incremented settings. Owners alone can rename; stale versions return 409. Example:
+
+```json
+{"name":"Launch operations","version":0}
+```
+
+## Notification audience
+
+Notifications have types ASSIGNED, COMMENT, and MEMBERSHIP. Assignment notifies the assignee; comments notify existing participants and the assignee. A mutation's actor does not receive a notification for their own action. Inbox reads join current workspace membership, so removing access hides historical notifications for that workspace. Read/unread changes are account scoped; foreign or no-longer-visible notification IDs return 404. Task deletion retains the notification with `taskId:null`. Notification text is a snapshot, and the app rechecks access before opening a task link. There is no live push subscription.
 
 ## Filtering and paging
 
-Tasks accept `q`, `status`, `priority`, `projectId`, `assigneeId`, `page`, and `size`. Search is a literal, case-insensitive substring; SQL wildcard characters are ordinary text. Pages start at zero and size must be 1–100. The default task size is 50; activity defaults to 30. Responses are `{items,page,size,total,totalPages}`. A page past the last page has no items. Projects and members are arrays rather than paged responses.
+Tasks accept `q`, `status`, `priority`, `projectId`, `assigneeId`, `page`, and `size`. Search is a literal, case-insensitive substring, at most 200 characters; SQL wildcard characters are ordinary text. Pages start at zero and size must be 1–100. The default task size is 50; activity and notifications default to 30. Responses are `{items,page,size,total,totalPages}`; inbox adds `unreadCount` across all currently visible items, independently of the page. A page past the last page has no items. Projects/members are arrays; invitations and account sessions are bounded arrays of at most 100.
 
 ## Errors and conflicts
 
@@ -112,11 +156,12 @@ Tasks accept `q`, `status`, `priority`, `projectId`, `assigneeId`, `page`, and `
 | --- | --- |
 | 400 | Invalid JSON, field values, enum, date, UUID, paging, or missing version |
 | 401 | Sign-in required or invalid credentials |
-| 403 | Insufficient workspace role or missing/invalid CSRF token |
+| 403 | Insufficient role, verification/registration policy, email mismatch, or missing/invalid CSRF token |
 | 404 | Object absent or workspace not accessible to this user |
 | 409 | Duplicate/conflicting state or stale optimistic version |
 | 413 | API request body exceeds the 64 KiB limit |
-| 429 | Authentication rate limit reached; follow `Retry-After` |
+| 429 | Authentication limit (with `Retry-After`) or daily invitation limit |
 | 500 | Unexpected failure; report request ID |
+| 503 | Invitation creation requires enabled email delivery |
 
 Errors use ProblemDetail-style JSON containing `status`, `title`, `detail`, and `requestId`; field validation can add `errors`. Never retry a stale mutation unchanged: fetch the current object, show the conflict to the user, then submit a deliberate edit using its new version. Network retries of create/comment operations can duplicate data because the API does not provide idempotency keys.

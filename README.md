@@ -1,24 +1,26 @@
 # Orbit
 
-Orbit is a collaborative project workspace built with **Java 17 and Spring Boot 4.1.1**. A browser application and transactional HTTP API ship in one executable JAR. Teams can organize projects, assign work, discuss tasks, manage access, and review activity. Every product screen uses the real API; changes persist across reloads and application restarts.
+Orbit is a collaborative project workspace built with **Java 17 and Spring Boot 4.1.1**. Its browser and transactional API ship in one JAR. Organize projects, assign work, discuss tasks, manage access, and review activity. Screens use the real API; changes persist across reloads/restarts.
 
-PostgreSQL is the production database. Persistent H2 provides immediate local use without installing a database. Spring serves the HTML, CSS, and JavaScript directly: **no Node.js build, CDN, or separate frontend server is required to run Orbit**. Optional Node.js tools support browser tests and formatting. This guide covers product use, development, deployment, and operations. Customer rollout still requires environment-specific security review, capacity planning, backups, and operational ownership.
+PostgreSQL is the production database; persistent H2 supports immediate local use. Spring serves HTML/CSS/JavaScript: **no Node.js build, CDN, or separate frontend server is required**. Optional tools support browser/format checks. Customer rollout requires security review, capacity planning, backups, and operational ownership.
 
 ## Product capabilities
 
 | Area | Capabilities |
 | --- | --- |
-| Workspaces | Create and switch workspaces with separate projects, tasks, and membership. |
+| Workspaces | Create/switch independent workspaces; owners rename with conflict protection. |
 | Overview | Review total, completed, in-progress, and overdue work; inspect project progress, deadlines, and recent activity. |
 | Projects | Create and edit named, colored projects; review task progress; archive finished initiatives. |
 | Tasks | Switch board/list views; edit descriptions, status, priority, assignee, project, and deadline; delete with confirmation. |
 | Search | Combine literal text search with status, priority, project, and assignee filters; navigate paged results. |
 | Discussion | Add comments with author identity/time and revisit them in task details. |
-| Team | Add registered accounts as members/viewers, change roles, and remove membership. |
+| Team | Add registered accounts, change roles/remove access, or send expiring email invitations with acceptance history. |
+| Account | Edit display name; verify email; recover/change passwords; inspect/revoke active sessions. |
+| Notifications | Assignment/comment/access inbox, unread count, individual/all read controls, and workspace/task links. |
 | Activity/export | Browse activity history and download workspace tasks as spreadsheet-safe CSV. |
 | Browser | Responsive desktop/mobile navigation, labeled forms, keyboard-accessible dialogs, and loading, empty, error, and conflict states. |
 
-Task statuses are `BACKLOG`, `TODO`, `IN_PROGRESS`, `IN_REVIEW`, and `DONE`; priorities are `LOW`, `MEDIUM`, `HIGH`, and `URGENT`. Tasks belong to a project and may have an assignee and deadline. Overdue counts compare unfinished tasks with the current UTC date. Archived projects can be restored, remain editable, and may contain tasks. Board changes use status selectors. Each filter initially loads 50 tasks with a **Load more** control; board lane counts describe loaded results. CSV exports all workspace tasks independently of the current filters.
+Statuses are `BACKLOG`, `TODO`, `IN_PROGRESS`, `IN_REVIEW`, `DONE`; priorities are `LOW`, `MEDIUM`, `HIGH`, `URGENT`. Tasks require a project; assignee/deadline are optional. Overdue counts use the UTC date. Archived projects remain editable and can be restored. Boards use status selectors, initially loading 50 filtered tasks with **Load more**; lane counts describe loaded results. CSV exports every workspace task regardless of filters.
 
 ### First-session walkthrough
 
@@ -26,10 +28,8 @@ Task statuses are `BACKLOG`, `TODO`, `IN_PROGRESS`, `IN_REVIEW`, and `DONE`; pri
 2. Open **Overview**, inspect progress, then select or create a project with a name, description, and color.
 3. In **My workspace**, create work and choose its project, status, priority, assignee, and optional deadline. Switch views and try search/filters.
 4. Open task details, edit the task, and add a comment. Reload and reopen it to verify persistence.
-5. An owner can add someone in **Team** using their already registered email. MEMBER can collaborate; VIEWER can read. Membership is immediate; no invitation email is sent.
-6. Review **Activity** or export tasks. Switch workspaces to see each team's independent resources.
-
-Account settings support profile updates, verification, password changes/recovery, and individual session revocation. Owners can rename workspace settings and send/revoke seven-day email invitations for members/viewers. The account notification inbox records assignments, comments, and access changes, with individual/all read controls and saved workspace/task links. Email flows require configured SMTP; local Mailpit captures test delivery.
+5. An owner can add a registered email immediately or invite an address through configured email. Invitations expire in seven days; the recipient must sign in with the matching email. MEMBER collaborates; VIEWER reads.
+6. Review **Activity**, export tasks, or open **Notifications**. Links restore the workspace and open task after reload. Owners can rename workspace settings; account settings manage display name, passwords, and sessions.
 
 ## Requirements and quickstart
 
@@ -39,8 +39,9 @@ Account settings support profile updates, verification, password changes/recover
 | Linux/macOS wrapper | `unzip`, so Maven's pinned ZIP can be checksum-verified. |
 | Docker deployment/PostgreSQL tests | Docker Engine/Desktop with Compose and a running daemon. |
 | Optional browser/format tools | Node.js 20 or later, npm, and Playwright Chromium; CI uses Node.js 24. |
+| Optional OpenAPI validation | Python 3.10 or later with pip/venv; [commands](api/README.md). |
 
-The wrapper pins Maven 3.9.11 and its distribution checksum. A global Maven installation is unnecessary. Run commands from the repository root.
+The wrapper pins Maven 3.9.16 and its distribution checksum. A global Maven installation is unnecessary. Run commands from the repository root.
 
 **Windows PowerShell:**
 
@@ -57,7 +58,7 @@ chmod +x mvnw start.sh
 ./mvnw spring-boot:run
 ```
 
-Open [http://localhost:8080](http://localhost:8080). Alternatively, double-click `start.cmd` or run `./start.sh`. The launchers use Java from `JAVA_HOME` when set, with a PATH fallback. They build a missing JAR and deliberately select the **local** profile on `127.0.0.1`; they do not select production from environment variables. Rebuild with `verify` after source changes before reusing an existing JAR. Direct `java` commands and automatic browser-test startup additionally require Java on PATH.
+Open [http://localhost:8080](http://localhost:8080), double-click `start.cmd`, or run `./start.sh`. Launchers honor `JAVA_HOME` with a PATH fallback, build only a missing JAR, and force **local** on loopback. Rebuild after source edits before reusing a JAR. Direct `java` commands/browser-test startup require Java on PATH.
 
 Local demo credentials:
 
@@ -66,11 +67,11 @@ Email:    alex@orbit.local
 Password: OrbitDemo!2026
 ```
 
-**Northstar Studio** contains three projects, 21 tasks, teammates, comments, and activity. Dates are relative to initialization. The seed runs once: edits remain, and restarting does not restore original demo content. Published demo credentials belong only in local development.
+**Northstar Studio** contains three projects, 21 tasks, teammates, comments, and activity with relative deadlines. It seeds once; edits survive restarts. Public demo credentials belong only in local development.
 
 ### Persistence and profiles
 
-The default `local` profile binds HTTP to loopback and stores H2 in `data/`, relative to the working directory. Users, domain records, and JDBC sessions survive restarts. Stop Orbit before copying/replacing database files. `data/` is ignored by Git and excluded from the image.
+Default `local` binds loopback and stores H2 in `data/` relative to the working directory. Records/JDBC sessions survive restarts. Stop Orbit before copying database files. Git/images exclude `data/`.
 
 To initialize without demo content:
 
@@ -78,7 +79,11 @@ To initialize without demo content:
 .\mvnw.cmd spring-boot:run '-Dspring-boot.run.arguments=--orbit.demo.enabled=false'
 ```
 
-This does not delete existing data. For a fresh demo, stop the app and choose a new disposable database, preserving local work first. The explicit `prod` profile requires PostgreSQL credentials, disables local demo initialization, and defaults to secure cookies. Never deploy with the default local profile.
+This does not delete data. For a fresh demo, preserve local work and choose a new disposable database. `prod` requires PostgreSQL/HTTPS configuration, disables demo, and defaults to secure cookies/required verification. Never deploy with `local`.
+
+### Local email workflows
+
+Local email is disabled by default. To exercise verification, recovery, and invitations without external delivery, start `docker compose -f compose.dev.yaml up -d` and configure the loopback Mailpit SMTP sink. Its inbox is [http://127.0.0.1:8025](http://127.0.0.1:8025). The [account/email guide](docs/ACCOUNT_SECURITY.md) provides runnable Windows/Linux startup, test-key generation, and mandatory SMTP settings. The UI explains when email actions are unavailable.
 
 ## Configuration
 
@@ -92,6 +97,19 @@ Override Spring properties through environment variables or application argument
 | `PORT` / `server.port` | `8080` | Application HTTP port. |
 | `server.address` | Loopback in `local` | Local bind address; Compose publishes only loopback separately. |
 | `ORBIT_SESSION_SECURE` | Local `false`; production `true` | Secure cookie; production browser traffic requires HTTPS. |
+| `ORBIT_PUBLIC_BASE_URL` | Local `http://127.0.0.1:8080`; required HTTPS origin in `prod` | Action-link origin; no path, credentials, query, or fragment. |
+| `ORBIT_REGISTRATION_ENABLED` | `true` | Control self-service registration. |
+| `ORBIT_EMAIL_VERIFICATION_REQUIRED` | Local `false`; production `true` | Deny sign-in until email verification. |
+| `ORBIT_MAIL_ENABLED` | Local `false`; production Compose `true` | Enable durable SMTP; verification with signup requires it. |
+| `ORBIT_MAIL_HOST`, `ORBIT_MAIL_PORT` | Host required when enabled; port `587` | SMTP destination. |
+| `ORBIT_MAIL_USERNAME`, `ORBIT_MAIL_PASSWORD` | Provider configuration | Authentication is used when username is nonblank. |
+| `ORBIT_MAIL_FROM` | Required valid sender when enabled | Provider-approved single email address. |
+| `ORBIT_MAIL_STARTTLS` | `true` | Require STARTTLS/identity validation; ten-second SMTP timeouts. |
+| `ORBIT_MAIL_ENCRYPTION_KEY` | Required Base64 32-byte key when enabled | AES-GCM outbox-body encryption; stable/shared across replicas. |
+| `orbit.accounts.reset-token-ttl` | `30m` | Reset link expiry; configurable one minute to seven days. |
+| `orbit.accounts.verification-token-ttl` | `24h` | Verification expiry; same range. |
+| `orbit.accounts.token-send-cooldown` | `1m` | Per account/purpose issuance interval; one second to one hour. |
+| `orbit.mail.dispatch-delay-ms` | `5000` | Background outbox dispatch interval. |
 | Session cookie | `ORBIT_SESSION`, path `/` | Explicit HttpOnly, SameSite=Lax serializer. |
 | `server.servlet.session.timeout` | `8h` | Configured session inactivity timeout. |
 | `management.server.port/address` | Production `9091` / `127.0.0.1` | Private management server; unpublished in Compose. |
@@ -109,7 +127,7 @@ Compose also reads `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and opti
 
 ## Production deployment
 
-Copy `.env.example` to `.env`, choose a long random database password, and keep the file private:
+Copy `.env.example` to `.env`, replace every placeholder, and keep it private. Supply a long random database password, HTTPS public origin, approved SMTP settings, and a securely generated 32-byte Base64 outbox key:
 
 ```powershell
 Copy-Item .env.example .env
@@ -119,13 +137,13 @@ docker compose ps
 docker compose logs --tail=100 app
 ```
 
-Linux/macOS use `cp .env.example .env` and `chmod 600 .env`, then the same Compose commands. Required database variables are checked. Never commit `.env`; use platform secret injection rather than build arguments or passwords in URLs for managed deployments.
+Linux/macOS use `cp .env.example .env` and `chmod 600 .env`, then the same Compose commands. Required database/public-origin variables are checked. Enabled mail validates its host, sender, and key; test actual delivery before signup. Use secret injection for managed deployments, and keep a protected outbox-key recovery copy separately from database backups.
 
 The multi-stage image builds and verifies Java, then runs a Java 17 runtime as UID/GID **10001**. Compose drops capabilities, prevents privilege escalation, sets a read-only application root filesystem, and provides bounded `/tmp`. PostgreSQL 17 uses a persistent named volume. Neither DB nor management is published; HTTP maps to `127.0.0.1:8080` by default.
 
 ### HTTPS with Caddy
 
-On a host with Caddy installed, point a domain you control at the host and allow certificate issuance and inbound ports 80/443. Save this as `Caddyfile`, replacing the domain:
+Install Caddy, point your domain at the host, and allow certificate issuance/ports 80/443. Save this `Caddyfile`, replacing the domain:
 
 ```caddyfile
 orbit.example.com {
@@ -152,36 +170,41 @@ $env:DB_URL = 'jdbc:postgresql://database.internal:5432/orbit?sslmode=verify-ful
 $env:DB_USERNAME = 'orbit'
 # Supply DB_PASSWORD through deployment secret injection.
 $env:ORBIT_SESSION_SECURE = 'true'
+$env:ORBIT_PUBLIC_BASE_URL = 'https://orbit.example.com'
+# Supply required SMTP variables and the outbox key through secret injection.
 java -jar .\target\orbit-1.0.0.jar
 ```
 
-On Linux, supply the same environment through your service manager before `java -jar target/orbit-1.0.0.jar`. Configure certificate trust for the database provider. Flyway validates/applies migrations at startup, so the credential currently needs migration privileges. Stricter runtime privileges require a separate approved migration step.
+On Linux, supply these variables through your service manager before `java -jar target/orbit-1.0.0.jar`. Configure database certificate trust. Flyway applies migrations at startup; stricter runtime privileges require a separate migration step.
 
 ## Source layout and architecture
 
 ```text
-src/main/java/com/orbit/auth/       Accounts, authentication, current user
+src/main/java/com/orbit/auth/       Accounts, tokens, authentication, sessions
 src/main/java/com/orbit/config/     Security, cookies, limits, errors, request IDs
-src/main/java/com/orbit/domain/     Workspace/project/task/comment/activity services
+src/main/java/com/orbit/domain/     Workspaces, tasks, invitations, notifications
+src/main/java/com/orbit/mail/       Encrypted transactional outbox and SMTP dispatcher
 src/main/resources/db/migration/   Domain schema and JDBC-session migrations
 src/main/resources/static/         Browser HTML, CSS, JavaScript, favicon
 src/test/java/                    H2/security and PostgreSQL contract checks
 e2e/                              Desktop/mobile browser checks
 docs/                             API, architecture, operations
+api/                              OpenAPI contract and validation tools
+scripts/                          Backup and isolated recovery tools
 .github/                          CI and dependency updates
 ```
 
 Orbit is a modular monolith using Spring MVC, Security, JDBC, Session JDBC, Jakarta Validation, Flyway, and Actuator. Controllers accept validated records and pass the authenticated actor ID to services. Parameterized queries and explicit response models keep SQL structure and database internals out of user-controlled JSON.
 
-Membership and object lookups are workspace-scoped; composite foreign keys also prevent foreign project/assignee references. Mutation and activity inserts share a transaction. Removing a member clears assignments and increments affected task versions while retaining historical authorship. JDBC sessions support replicas sharing sign-in state; database availability and shared throttling remain separate concerns.
+Membership and object lookups are workspace-scoped; composite foreign keys prevent foreign project/assignee references. Mutation, activity, notifications, and mail intent share a transaction. Removing membership clears assignments/increments versions while retaining historical authorship. Inbox visibility follows current membership. JDBC sessions support replicas; account versions enforce password revocation. Email uses authenticated encryption and a leased, retrying outbox; SMTP is at least once. Database availability and shared throttling remain separate concerns.
 
 ## HTTP API
 
-Routes are same-origin. JSON uses camelCase, UUID-string IDs, ISO timestamps, and calendar-date deadlines. Creation returns 201, edits 200, and deletion/logout 204. See [API.md](docs/API.md) for exact fields and validation limits.
+Same-origin JSON uses camelCase, UUID IDs, ISO timestamps, and calendar-date deadlines. Creation returns 201, edits 200, deletion/logout 204. [API.md](docs/API.md) specifies fields/limits.
 
 ### Sessions and CSRF
 
-Request `/api/auth/csrf`, retain the cookie, and send its token/header name for every mutation, including registration/login/logout. Login rotates the session ID and clears the previous CSRF token; fetch another token afterward. Local `curl`/`jq` example:
+Get `/api/auth/csrf`, retain cookies, and send its token/header on every mutation, including registration/login/logout. Login rotates the session and clears CSRF; fetch a fresh token. Local `curl`/`jq`:
 
 ```sh
 BASE=http://localhost:8080
@@ -206,12 +229,17 @@ Workspace-relative paths start with `/api/workspaces/{workspaceId}`. Every write
 | --- | --- |
 | `/api/auth/{csrf,config,me}` | GET token/config/current user. |
 | `/api/auth/{register,login,logout}` | POST account creation/sign-in/session invalidation. |
+| `/api/auth/{forgot-password,reset-password,verify-email,resend-verification}` | POST email lifecycle flows. |
+| `/api/account`, `/api/account/{password,verification,sessions}` | Profile, password change, resend, session list/revocation. |
 | `/api/workspaces` | GET memberships; POST workspace. |
+| `/settings`, `/invitations` | Versioned owner settings and email invitation management. |
 | `/members`, `/members/{userId}` | GET/POST members; PATCH role; DELETE membership. |
 | `/projects`, `/projects/{projectId}` | GET/POST projects; PATCH project. |
 | `/tasks`, `/tasks/{taskId}` | GET/POST tasks; GET/PATCH/DELETE task. |
 | `/tasks/{taskId}/comments` | GET/POST comments. |
 | `/overview`, `/activity`, `/export` | GET dashboard, paged activity, or CSV. |
+| `/api/invitations/{preview,accept}` | Token preview and email-bound acceptance. |
+| `/api/notifications` | Paged inbox and scoped read/all-read mutations. |
 
 ```json
 {
@@ -227,22 +255,25 @@ Workspace-relative paths start with `/api/workspaces/{workspaceId}`. Every write
 
 PATCH requires the complete editable object and current numeric `version`, rather than JSON Merge Patch. DELETE requires `?version=N`. Atomic comparison/increment prevents silent overwrites; stale edits receive **409**. Reload and reconcile before resubmitting.
 
-Task queries support `q`, `status`, `priority`, `projectId`, `assigneeId`, `page`, and `size`. Search is literal and case-insensitive, including `%`, `_`, and `!`. Pages start at zero; sizes are 1–100 with task/activity defaults 50/30. The envelope is `{items,page,size,total,totalPages}`. Concurrent writes can move records between requests. Creates/comments lack idempotency keys, so blind retries may duplicate data.
+Task queries support `q`, `status`, `priority`, `projectId`, `assigneeId`, `page`, and `size`. Search is literal and case-insensitive, including `%`, `_`, and `!`. Pages start at zero; sizes are 1–100 with task/activity/inbox defaults 50/30/30. The envelope is `{items,page,size,total,totalPages}`; inbox adds `unreadCount`. Concurrent writes can move records between requests. Creates/comments lack idempotency keys, so blind retries may duplicate data.
 
-RFC ProblemDetail-style errors include `status`, `title`, `detail`, and `requestId`; validation can add `errors`. Responses carry `X-Request-ID`. Statuses include 400 invalid input, 401 unauthenticated, 403 role/CSRF, 404 absent/inaccessible, 409 conflict, 413 oversized body, and 429 auth throttling with `Retry-After`. Unexpected failures return generic 500 details without stack traces.
+ProblemDetail-style errors include `status`, `title`, `detail`, and `requestId`; validation can add `errors`. Responses carry `X-Request-ID`. Statuses include 400 input, 401 unauthenticated, 403 role/CSRF/verification, 404 absent/inaccessible, 409 conflict, 413 oversized body, 429 authentication/invitation limits, and 503 invitations without mail. The auth limiter supplies `Retry-After`. Unexpected failures return generic 500 details.
 
 ## Verification and developer tools
 
-**55 backend test executions passed**: 32 H2/security/account/email tests plus 23 account, collaboration, and workflow checks against PostgreSQL 17. **Six Chromium scenarios passed** for desktop and mobile. These counts are executed checks, not a penetration test or throughput claim.
+**55 backend test executions passed without failures or skips**: 32 H2/security/mail checks plus 23 scenarios against real PostgreSQL 17.11, including accounts and collaboration. **Six Chromium scenarios passed without skips**, including actual SMTP delivery to Mailpit. These are executed checks, not a penetration test or throughput claim.
 
 | Checks | Coverage |
 | --- | --- |
 | Backend | Real filters/cookies, CSRF, rotation/logout, input validation, tenant isolation, roles, stale versions, assignment removal, comments, overview, literal search/paging, CSV, and abuse controls. |
-| PostgreSQL | Shared eight-scenario HTTP contract, real database, and migrations. |
+| Account/mail | Verification/recovery, token expiry/single-use/cooldowns, legacy sessions, all-session revocation, encrypted outbox/retries. |
+| PostgreSQL | Original eight workflows, eight account and seven collaboration scenarios, real migrations. |
+| Collaboration | Settings/roles, invite email binding/reissue/revocation/expiry/concurrency, scoped notification audiences. |
 | Desktop | Task creation, assignment, date/status/priority edits, comments, reload persistence, and deletion. |
 | Mobile | Signup, workspace/project creation, navigation/overflow, reload, and subsequent sign-in. |
+| Browser lifecycle | Profile/workspace rename, session revocation/password change, notification links/reload, captured verification/reset/invitation email. |
 
-Production Compose also passed a complete HTTP task/comment flow, an application-only restart with unchanged session identity, persisted data, and a subsequent CSRF-authenticated edit. Nonroot identity, read-only filesystem, healthy readiness, disabled demo, and private management networking were checked.
+Production Compose passed required verification through captured SMTP, password reset/session revocation, and task/comment persistence with the unchanged session after app-only restart. Secure/HttpOnly/Lax defaults, UID 10001, read-only filesystem, readiness/liveness, disabled demo, and private management were checked. Functional HTTP checks explicitly disabled Secure only in that isolated fixture after confirming its default.
 
 ```powershell
 .\mvnw.cmd verify
@@ -273,13 +304,13 @@ npm run format:check
 npm run format
 ```
 
-Linux may need `npx playwright install --with-deps chromium`. Playwright starts the local JAR or reuses an existing server outside CI. `ORBIT_BASE_URL` selects a disposable alternate server; `ORBIT_BROWSER_EXECUTABLE` selects compatible installed Chromium. Browser tests retain created accounts/workspaces because their deletion APIs are absent: use disposable data. Failure screenshots/traces are in `test-results/`; inspect with `npx playwright show-trace <trace.zip>`. See [browser guidance](e2e/README.md).
+Linux may need `npx playwright install --with-deps chromium`. Playwright starts the local JAR or reuses a server outside CI. `ORBIT_BASE_URL` selects a disposable alternate server; `ORBIT_BROWSER_EXECUTABLE` selects installed Chromium. Four flows always execute; two email flows require enabled SMTP and `ORBIT_MAILPIT_URL`, otherwise explicitly skip. CI enables the sink and runs all six. Tests retain accounts/workspaces: use disposable data. Failure traces can contain test credentials/links; protect `test-results/`. See [browser guidance](e2e/README.md).
 
 ## Security and known limits
 
 | Role | Permissions |
 | --- | --- |
-| OWNER | Read/export, create/edit projects and tasks, delete tasks, add comments, manage membership. |
+| OWNER | Read/export, edit projects/tasks, delete tasks, comment, manage membership/invitations/settings. |
 | MEMBER | Read/export, create/edit projects and tasks, delete tasks, add comments. |
 | VIEWER | Read/export only. |
 
@@ -287,33 +318,31 @@ Initial membership accepts MEMBER/VIEWER; owners may promote existing members. S
 
 BCrypt cost 12 protects passwords; registration allows 12–72 characters and at most 72 UTF-8 bytes. The session identifier stays in an HttpOnly cookie, not browser local storage; passwords are never stored in that cookie. JDBC persists security contexts and session/CSRF state; logout invalidates the session. Parameterized SQL, input constraints, workspace guards, database relationships, escaped browser text, and a same-origin script CSP provide overlapping protections. Inline styles remain allowed. CSV fields are quoted and formula-like values prefixed for spreadsheet safety.
 
-Registration is open. Rate limits are per instance/IP, proxies can collapse addresses, and replicas do not share counters. Public traffic needs a gateway-wide abuse/signup policy. Activity is an application trail, not a tamper-proof compliance archive.
+Production defaults to configurable signup and verified email. Migration marks historical accounts unverified and invalidates legacy sessions: plan SMTP/support. Action secrets are hashed, expiring, single use. Password replacement revokes sessions; listed IDs are opaque row IDs. Generic recovery reduces direct disclosure without identical-timing guarantees. IP limits are per instance; proxies can collapse addresses. Public traffic needs shared abuse controls. Activity is not tamper-proof.
 
-There is no SSO/MFA, account/workspace deletion, billing, attachments, or live push. Notifications refresh on demand. Workspace/task links restore context and recheck access. Task deletion is permanent. Exports are synchronous and large workspaces require measurement. No SLA, formal penetration-test result, or automatic disaster-recovery guarantee is claimed.
-
-Account APIs support profile updates, email verification, password recovery, and active-session controls. SMTP delivery uses an encrypted transactional outbox with bounded retries. See [Account security and email](docs/ACCOUNT_SECURITY.md) for setup, migration behavior, and exact endpoints.
+There is no SSO/MFA, email-address change, account/workspace deletion, billing, attachments, or live push. Notifications refresh on demand. Task/workspace links restore context; access is rechecked. Task deletion is permanent. Exports are synchronous; large workspaces require measurement. Account-token/security-event/notification retention needs an operator policy. Outbox key rotation and operator-wide account administration are not automated. No SLA, formal penetration-test result, or automatic disaster-recovery guarantee is claimed.
 
 ## Operations and troubleshooting
 
-Within the app container, management uses `http://127.0.0.1:9091` with paths `/actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness`, and `/actuator/prometheus`. These are unauthenticated within loopback. Docker probes liveness; readiness includes DB. Do not publish management to simplify scraping. Monitor errors/latency, JVM memory, pool saturation, DB locks/connections/storage, throttling, and backup age.
+Container management uses loopback `http://127.0.0.1:9091` with `/actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness`, `/actuator/prometheus`. Docker probes liveness; readiness includes DB. Keep management private. Monitor latency/errors, JVM memory, pool saturation, DB locks/storage/connections, throttling, mail failures, and backup age.
 
-The volume survives normal replacement, but persistence is not a backup. **`docker compose down -v` deletes database storage**; never use it for routine updates. Encrypt backups, copy them off-host, and define retention/PITR requirements. Linux logical dump:
+The volume survives normal replacement, but persistence is not a backup. **`docker compose down -v` deletes database storage**; never use it for routine updates. Encrypt backups, copy them off-host, and define retention/PITR requirements. Windows binary-safe backup and isolated recovery:
 
-```sh
-mkdir -p backups
-chmod 700 backups
-umask 077
-docker compose exec -T db sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom' > backups/orbit.dump
+```powershell
+.\scripts\backup.ps1 -ProjectName orbit -EnvFile .\.env
+.\scripts\restore.ps1 -BackupFile .\backups\YOUR_BACKUP.dump -Name orbit-restore-drill
 ```
 
-Use binary-safe output. Older Windows PowerShell redirection can alter native binary data; dump inside the container and copy the file out, or use verified backup tooling. Dumps contain content, password hashes, and sessions. Test restoration in isolation and exercise product flows before relying on backups.
+Linux/macOS use `scripts/backup.sh` and `scripts/restore.sh`. The scripts catalog-check a logical dump/checksum and restore only into a new labeled volume/container with no network/ports and read-only default transactions. Sessions are removed by default. They never promote production. PostgreSQL drills verified Unicode/multiline content, relations/versions, binary sessions opt-in, checksum/collision rejection, and unchanged source data. See [script guidance](scripts/README.md).
 
-Applied Flyway migrations are immutable: add a version instead of editing history or disabling validation. Back up before schema changes and plan compatible rollouts. Code rollback does not undo migration; restoration can lose newer writes. Decide whether restored sessions need revocation during incident recovery. [RUNBOOK.md](docs/RUNBOOK.md) provides detailed procedures.
+Applied migrations are immutable: add a version rather than editing history. Back up before changes and plan compatible rollout; code rollback cannot undo migration, and restoration loses newer writes. Review recovered tokens and pending email; keep SMTP disabled until replay is approved and recover the outbox key separately. [RUNBOOK.md](docs/RUNBOOK.md) provides procedures.
 
 | Symptom | First checks |
 | --- | --- |
 | Wrapper checksum failure | Install `unzip`; retain checksum verification. |
 | Startup fails | Profile/DB variables, TLS/network, database health, first migration error. |
+| Mail startup/delivery fails | HTTPS public origin, SMTP host/from/key, TLS/credentials, outbox age/status. |
+| Verification blocks old account | Migration policy; resend to real mailbox and follow support recovery. |
 | Port in use | Existing server or `PORT`; browser-test server reuse. |
 | Login followed by 401 | HTTPS/Secure cookie, origin/path, browser cookie acceptance. |
 | Mutation 403 | Fresh CSRF after login/logout and correct role/session. |
@@ -325,15 +354,20 @@ Applied Flyway migrations are immutable: add a version instead of editing histor
 
 ## CI, release workflow, and documentation
 
-CI runs Java verification, PostgreSQL Testcontainers, Chromium scenarios, and an image build. PR dependency review rejects newly introduced high/critical vulnerabilities including development scopes. Enable the dependency graph; native review requires a public repository or supported GitHub Advanced Security configuration for private repositories.
+CI runs Java/PostgreSQL verification, OpenAPI validation, an isolated Linux recovery drill, six Chromium scenarios with Mailpit, formatting, and an image build. Trivy scans packaged Java and OS dependencies, publishes a CycloneDX SBOM/report, and fails selected HIGH/CRITICAL findings including unfixed ones. The final combined image passed locally without suppressions. Trivy normally uses vendor severity; the full SBOM retains lower-severity CVEs and alternate-source ratings. A passing gate does not mean zero vulnerabilities. See [severity selection](https://trivy.dev/docs/latest/guide/scanner/vulnerability/).
 
-OWASP Dependency-Check runs only with repository secret `NVD_API_KEY`; otherwise it reports an explicit skip notice. It fails at CVSS 7 or higher. **The full vulnerability scan has not been run locally.** Passing builds do not imply clean vulnerability reports or completed remote CI. Dependabot proposes Maven, npm, action, and image updates.
+PR dependency review rejects new high/critical findings including development scopes; enable the dependency graph and supported private-repository security configuration. Optional OWASP runs with `NVD_API_KEY`, failing at CVSS 7; otherwise it explicitly skips while Trivy still runs. OWASP has not been run locally. Passing builds do not prove completed remote checks. Dependabot checks Maven, npm, Python validation tools, actions, Dockerfile images, and Compose images weekly. Java 17 and PostgreSQL 17 remain deliberate baselines: major Temurin/PostgreSQL image updates are ignored and require a compatibility/data migration review; minor and patch updates remain eligible.
 
-Release through a focused reviewed PR with relevant checks. Review migrations/security, record the tested artifact, and deploy with secrets/TLS, a backup, measured limits, and rollback ownership. Verify the deployed browser flow and restore procedure. Pin tested image digests/action commits where policy requires.
+The reference repository protects `main`: changes require a pull request, an up-to-date branch, passing `verify` and `dependency-review` checks, and resolved review conversations. Force pushes and branch deletion are disabled; these rules apply to administrators. Separate approval votes are not required.
+
+Release through a focused reviewed PR with relevant checks. CI actions are pinned to verified release commits with version comments; Dependabot maintains them. Review migrations/security, record the tested image digest, and deploy with secrets/TLS, a backup, measured limits, and rollback ownership. Verify the deployed browser flow and recovery procedure.
 
 - [API guide](docs/API.md): exact fields, validation, roles, paging, errors.
+- [OpenAPI contract](api/openapi.yaml): validated machine-readable operations/schemas.
+- [Account/email security](docs/ACCOUNT_SECURITY.md): verification migration, recovery, sessions, SMTP/key operations.
 - [Architecture](docs/ARCHITECTURE.md): modules, relationships, transactions, sessions.
 - [Runbook](docs/RUNBOOK.md): rollout, ingress, monitoring, backup/restore, incidents.
+- [Backup/recovery tools](scripts/README.md): safe Windows/Linux commands and limitations.
 - [Browser checks](e2e/README.md): test data, browser selection, traces, cleanup.
 
 Compose is a single-host reference, without database failover, autoscaling, automated remote backups, or alert delivery. Choose and verify those services for your environment before customer rollout.

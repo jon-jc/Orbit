@@ -8,18 +8,23 @@ flowchart LR
     Proxy -->|Loopback/private network| App[Spring MVC + Security]
     App --> Auth[Authentication]
     App --> Domain[Workspace domain]
+    App --> Mail[Leased SMTP dispatcher]
     Auth --> DB[(PostgreSQL)]
     Domain --> DB
+    Mail --> DB
+    Mail --> SMTP[SMTP provider / local Mailpit]
     Management[Loopback health and metrics] --- App
 ```
 
 ## Module boundaries
 
-`com.orbit.auth` owns registration, BCrypt authentication, explicit session security-context persistence, session ID rotation, and current-user resolution. A user is global; membership grants access to individual workspaces.
+`com.orbit.auth` owns registration, BCrypt authentication, verification/reset tokens, profile/password changes, explicit session security-context persistence, session rotation/revocation, and current-user resolution. A user is global; membership grants access to individual workspaces. Authentication versions are checked against the database so password replacement remains authoritative when a concurrent request saves an old session.
 
 `com.orbit.config` owns filter chains, CSRF, security headers, request IDs, error translation, and the bounded authentication rate limiter. Infrastructure does not authorize workspace resources: the domain checks membership and roles on each request.
 
-`com.orbit.domain` owns workspace membership, projects, tasks, comments, activity, overview aggregation, and export. Controllers deserialize validated records and pass the authenticated user ID to the service. The service uses parameterized JDBC queries and explicit response records. Static assets use this same-origin API; there is no separate frontend deployment or CORS dependency.
+`com.orbit.domain` owns versioned workspace settings, membership/invitations, projects, tasks, comments, notification audiences, activity, overview aggregation, and export. Controllers deserialize validated records and pass the authenticated user ID to the service. The service uses parameterized JDBC queries and explicit response records. Static assets use this same-origin API; there is no separate frontend deployment or CORS dependency.
+
+`com.orbit.mail` stores encrypted message intent in the same database transaction as the associated action. Its dispatcher claims due rows with leases and delivers via JavaMail outside the claim transaction. AES-256-GCM protects bodies/action links, using authenticated message metadata. Recipient/subject metadata remain plaintext. SMTP delivery is at least once, with bounded retries; no exactly-once promise is made.
 
 ## Data and invariants
 
@@ -34,17 +39,26 @@ erDiagram
     WORKSPACE ||--o{ ACTIVITY_EVENT : records
     APP_USER ||--o{ TASK_COMMENT : authors
     APP_USER ||--o{ ACTIVITY_EVENT : acts
+    APP_USER ||--o{ ACCOUNT_TOKEN : owns
+    APP_USER ||--o{ ACCOUNT_SECURITY_EVENT : records
+    WORKSPACE ||--o{ WORKSPACE_INVITATION : invites
+    APP_USER ||--o{ USER_NOTIFICATION : receives
+    WORKSPACE ||--o{ USER_NOTIFICATION : scopes
 ```
 
 All application IDs are UUID strings. Timestamps retain timezone information; deadlines are calendar dates. Membership uses a `(workspace_id, user_id)` primary key. Task references use composite workspace/project and workspace/assignee foreign keys, which reject references crossing workspaces even if an application guard fails. Comments similarly reference a task within the same workspace.
 
-An OWNER manages membership. OWNER and MEMBER edit projects/tasks and add comments. VIEWER can read and export. Workspace creation grants OWNER to the creator. Owners cannot demote themselves or delete an owner membership. Removing a member clears their task assignments and increments those task versions before deleting membership. Existing comments and activity retain their author identity.
+An OWNER manages membership, invitations, and settings. OWNER and MEMBER edit projects/tasks and add comments. VIEWER can read and export. Workspace creation grants OWNER to the creator. Owners cannot demote themselves or delete an owner membership. Removing a member clears their task assignments and increments those task versions before deleting membership. Existing comments and activity retain their author identity.
 
 The domain checks resource IDs within the requested workspace and checks actor membership first. A nonexistent workspace or a workspace inaccessible to the actor returns 404. A member who lacks an action's role gets 403. The service never trusts a frontend role or supplied actor ID.
 
 ## Consistency and concurrent changes
 
-Mutation methods are transactional. The main write and its activity insert either both commit or both roll back. The browser receives a task/project version. Updates use `WHERE workspace_id=? AND id=? AND version=?` and increment that version. Zero affected rows after a valid lookup produce 409. Task deletion also requires a version. A stale editor must reload and apply their change against the current object.
+Mutation methods are transactional. The main write, associated notifications/activity, and mail intent either commit or roll back together. The browser receives a task/project/workspace-settings version. Scoped updates compare and increment that version. Zero affected rows after a valid lookup produce 409. Task deletion also requires a version. A stale editor must reload and apply their change against the current object.
+
+Account-row locks serialize issuance and consumption of purpose-bound reset/verification tokens. A per-account/purpose cooldown preserves a usable link under repeated anonymous requests. SHA-256 hashes of 256-bit secrets are stored in token tables. Invitation acceptance locks the workspace, rechecks the inviter's ownership and target email, and consumes the token once. Reissuing an invitation revokes older unaccepted links for that workspace/email; it cannot silently replace an existing member's role.
+
+Notifications are account-scoped snapshots for assignment, comment, and membership events. Inbox queries join current workspace membership; losing access hides old notifications. Task deletion sets the notification task reference to null. Notification links recheck membership/task access and are not authorization credentials. No realtime transport is present.
 
 List endpoints return bounded pages: sizes 1–100, page numbers starting at zero. Task search uses escaped SQL LIKE patterns so `%` and `_` remain literal text. Sorts include IDs as a stable tie-breaker. This provides deterministic pages when data is unchanged; changes between page requests can move records, so this is not a snapshot or cursor pagination guarantee. Dashboard reads and CSV exports use current committed data. Exports and overview computation should be load-tested at the largest intended workspace size; there is no asynchronous export job.
 
@@ -62,4 +76,6 @@ The production profile requires database credentials and disables demo initializ
 
 The management HTTP server binds to loopback on port 9091. Health details are hidden and metrics remain within that network boundary. The application has graceful shutdown; orchestration should stop sending traffic before ending its process. Compose is a single-host reference deployment with persistent PostgreSQL storage, not high availability or automated disaster recovery.
 
-For a stricter environment, separate migration and runtime database privileges, use managed PostgreSQL with point-in-time recovery, pin container/action digests, add SSO/MFA and signup controls, define retention, and perform an independent security assessment. These are environment or product extensions, not features implied by the current code.
+The image build uses a checksum-pinned Maven distribution and updates runtime OS packages. CI actions use immutable verified release commits with version comments for Dependabot. CI validates OpenAPI, exercises real database/browser/recovery workflows, emits a CycloneDX inventory, and gates selected HIGH/CRITICAL OS and packaged Java vulnerabilities with Trivy. PR dependency review covers new runtime/development dependencies; optional OWASP adds another source with an NVD key. Trivy prefers distro/vendor severity; lower-severity CVEs and alternate-source ratings remain in the full inventory. Scans describe known findings at a point in time, not application exploitability or unknown vulnerabilities.
+
+For a stricter environment, separate migration and runtime database privileges, use managed PostgreSQL with point-in-time recovery, pin container/action digests, add SSO/MFA and shared signup controls, define retention, and perform an independent security assessment. These are environment or product extensions, not features implied by the current code. [Backup tools](../scripts/README.md) restore into new isolated read-only recovery resources; they do not promote production or configure off-host backup storage.

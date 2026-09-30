@@ -1,4 +1,4 @@
-FROM eclipse-temurin:17-jdk-jammy AS build
+FROM eclipse-temurin:25-jdk-jammy AS build
 RUN apt-get update && apt-get install -y --no-install-recommends unzip \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /workspace
@@ -8,7 +8,7 @@ RUN chmod +x mvnw && ./mvnw -B -ntp dependency:go-offline
 COPY src/ src/
 RUN ./mvnw -B -ntp verify
 
-FROM eclipse-temurin:17-jre-jammy AS runtime
+FROM eclipse-temurin:25-jre-jammy AS runtime
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 orbit \

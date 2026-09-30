@@ -89,7 +89,7 @@ public class DemoData implements ApplicationRunner {
 
     private String user(String name, String email, OffsetDateTime created) {
         String id = UUID.randomUUID().toString();
-        jdbc.update("INSERT INTO app_user(id,email,display_name,password_hash,created_at) VALUES(?,?,?,?,?)", id, email, name, encoder.encode("OrbitDemo!2026"), created);
+        jdbc.update("INSERT INTO app_user(id,email,display_name,password_hash,created_at,email_verified) VALUES(?,?,?,?,?,TRUE)", id, email, name, encoder.encode("OrbitDemo!2026"), created);
         return id;
     }
 

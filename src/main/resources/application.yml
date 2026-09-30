@@ -56,6 +56,21 @@ orbit:
     enabled: false
   auth:
     rate-limit-enabled: true
+  accounts:
+    public-base-url: ${ORBIT_PUBLIC_BASE_URL:http://127.0.0.1:8080}
+    registration-enabled: ${ORBIT_REGISTRATION_ENABLED:true}
+    email-verification-required: ${ORBIT_EMAIL_VERIFICATION_REQUIRED:false}
+    token-send-cooldown: 1m
+  mail:
+    enabled: ${ORBIT_MAIL_ENABLED:false}
+    host: ${ORBIT_MAIL_HOST:}
+    port: ${ORBIT_MAIL_PORT:587}
+    username: ${ORBIT_MAIL_USERNAME:}
+    password: ${ORBIT_MAIL_PASSWORD:}
+    from: ${ORBIT_MAIL_FROM:}
+    starttls: ${ORBIT_MAIL_STARTTLS:true}
+    encryption-key: ${ORBIT_MAIL_ENCRYPTION_KEY:}
+    dispatch-delay-ms: 5000
 logging:
   level:
     root: INFO

@@ -134,15 +134,11 @@ test("demo work persists through task creation, assignment, edits, comments, rel
       .click();
     await expect(dialog(page).locator(".comment-body")).toHaveText(comment);
     await expect(dialog(page).locator(".comment-body b")).toHaveCount(0);
-    await dialog(page)
-      .getByRole("button", { name: "Close dialog", exact: true })
-      .click();
-
+    expect(new URLSearchParams(page.url().split("?")[1]).has("task")).toBe(
+      true,
+    );
     await page.reload();
-    await page
-      .getByRole("searchbox", { name: "Search tasks", exact: true })
-      .fill(title);
-    await page.getByRole("button", { name: title, exact: true }).click();
+    await expect(dialog(page)).toBeVisible();
     await expect(
       dialog(page).getByLabel("Task name", { exact: true }),
     ).toHaveValue(title);
@@ -174,8 +170,11 @@ test("demo work persists through task creation, assignment, edits, comments, rel
       .click();
     await expect(dialog(page)).not.toBeVisible();
     await expect(
-      page.getByRole("heading", { name: "Nothing here just yet", exact: true }),
+      page.getByRole("heading", { name: "Good work, in motion.", exact: true }),
     ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: title, exact: true }),
+    ).toHaveCount(0);
     const remaining = await page.request.get(
       `/api/workspaces/${workspace.id}/tasks`,
       { params: { q: title } },
@@ -185,6 +184,431 @@ test("demo work persists through task creation, assignment, edits, comments, rel
   } finally {
     // A failed assertion should not leave test tasks in the shared demo workspace.
     if (workspace) await cleanupTask(page.request, workspace.id, title);
+  }
+});
+
+async function registerAndCreateWorkspace(
+  page,
+  { email, password, name, workspace },
+) {
+  await page.goto("/");
+  await page
+    .getByRole("button", { name: "Create account", exact: true })
+    .click();
+  await page
+    .getByRole("textbox", { name: "Your name", exact: true })
+    .fill(name);
+  await page
+    .getByRole("textbox", { name: "Email address", exact: true })
+    .fill(email);
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page
+    .getByRole("button", { name: "Create your account", exact: true })
+    .click();
+  await dialog(page)
+    .getByLabel("Workspace name", { exact: true })
+    .fill(workspace);
+  await dialog(page)
+    .getByRole("button", { name: "Create workspace", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "New task", exact: true }),
+  ).toBeVisible();
+}
+
+async function signInThroughUi(page, email, password) {
+  await page
+    .getByRole("textbox", { name: "Email address", exact: true })
+    .fill(email);
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page
+    .getByRole("button", { name: "Sign in to Orbit", exact: true })
+    .click();
+  await expect(page.locator(".app-shell")).toBeVisible();
+}
+
+async function apiLogin(request, email, password) {
+  const response = await request.post("/api/auth/login", {
+    headers: await csrfHeaders(request),
+    data: { email, password },
+  });
+  expect(response.status()).toBe(200);
+}
+
+async function holdApiResponse(page, pattern, method = "GET", override) {
+  let arrived, release, delivered;
+  const arrivedPromise = new Promise((resolve) => {
+    arrived = resolve;
+  });
+  const releasedPromise = new Promise((resolve) => {
+    release = resolve;
+  });
+  const deliveredPromise = new Promise((resolve) => {
+    delivered = resolve;
+  });
+  const handler = async (route) => {
+    if (route.request().method() !== method) return route.continue();
+    const response = await route.fetch();
+    arrived();
+    await releasedPromise;
+    await route.fulfill(override || { response });
+    delivered();
+  };
+  await page.route(pattern, handler);
+  return {
+    arrived: arrivedPromise,
+    delivered: deliveredPromise,
+    release,
+    close: async () => {
+      release();
+      await page.unroute(pattern, handler);
+    },
+  };
+}
+
+async function flushBrowserFrames(page) {
+  await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      }),
+  );
+}
+
+test("account and workspace settings persist, individual sessions end, and password changes revoke every session", async ({
+  page,
+  browser,
+}) => {
+  const suffix = unique();
+  const email = `security-${suffix}@example.test`;
+  const password = "OrbitInitial!2026";
+  const nextPassword = "OrbitUpdated!2026";
+  const workspace = `Security ${suffix}`;
+  const renamed = `Renamed ${suffix}`;
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await registerAndCreateWorkspace(page, {
+    email,
+    password,
+    name: "Casey Builder",
+    workspace,
+  });
+  await page.getByRole("link", { name: "Your account", exact: true }).click();
+  await page.getByLabel("Display name", { exact: true }).fill("Casey Rivera");
+  await page.getByRole("button", { name: "Save profile", exact: true }).click();
+  await expect(page.getByLabel("Display name", { exact: true })).toHaveValue(
+    "Casey Rivera",
+  );
+  await page
+    .getByRole("link", { name: "Workspace settings", exact: true })
+    .click();
+  await page
+    .locator("#settings-form")
+    .getByLabel("Workspace name", { exact: true })
+    .fill(renamed);
+  await page
+    .getByRole("button", { name: "Save workspace", exact: true })
+    .click();
+  await expect(
+    page
+      .getByRole("combobox", { name: "Switch workspace", exact: true })
+      .locator("option:checked"),
+  ).toHaveText(renamed);
+  const secondName = `Second ${suffix}`;
+  const creation = await holdApiResponse(page, "**/api/workspaces", "POST");
+  try {
+    await page
+      .getByRole("button", { name: "Create workspace", exact: true })
+      .click();
+    await dialog(page)
+      .getByLabel("Workspace name", { exact: true })
+      .fill(secondName);
+    await dialog(page)
+      .getByRole("button", { name: "Create workspace", exact: true })
+      .click();
+    await creation.arrived;
+    await expect(dialog(page)).toBeVisible();
+    creation.release();
+    await expect(dialog(page)).not.toBeVisible();
+    await expect(
+      page
+        .getByRole("combobox", { name: "Switch workspace", exact: true })
+        .locator("option:checked"),
+    ).toHaveText(secondName);
+    await expect(page.locator("#settings-name")).toHaveValue(secondName);
+  } finally {
+    await creation.close();
+  }
+  const firstWorkspace = await workspaceByName(page.request, renamed);
+  const secondWorkspace = await workspaceByName(page.request, secondName);
+  const oldSettings = await holdApiResponse(
+    page,
+    `**/api/workspaces/${secondWorkspace.id}/settings`,
+  );
+  const newMetadata = await holdApiResponse(
+    page,
+    `**/api/workspaces/${firstWorkspace.id}/projects`,
+  );
+  try {
+    await page
+      .getByRole("link", { name: "Workspace settings", exact: true })
+      .click();
+    await oldSettings.arrived;
+    await page
+      .getByRole("combobox", { name: "Switch workspace", exact: true })
+      .selectOption({ label: renamed });
+    await newMetadata.arrived;
+    oldSettings.release();
+    await oldSettings.delivered;
+    await flushBrowserFrames(page);
+    await expect(page.locator("#settings-form")).toHaveCount(0);
+    newMetadata.release();
+    await expect(page.locator("#settings-name")).toHaveValue(renamed);
+  } finally {
+    await oldSettings.close();
+    await newMetadata.close();
+  }
+  const failedMetadata = await holdApiResponse(
+    page,
+    `**/api/workspaces/${secondWorkspace.id}/projects`,
+    "GET",
+    {
+      status: 503,
+      contentType: "application/problem+json",
+      body: JSON.stringify({ detail: "A delayed metadata request failed." }),
+    },
+  );
+  try {
+    await page
+      .getByRole("combobox", { name: "Switch workspace", exact: true })
+      .selectOption({ label: secondName });
+    await failedMetadata.arrived;
+    await page
+      .getByRole("combobox", { name: "Switch workspace", exact: true })
+      .selectOption({ label: renamed });
+    await expect(page.locator("#settings-name")).toHaveValue(renamed);
+    failedMetadata.release();
+    await failedMetadata.delivered;
+    await flushBrowserFrames(page);
+    await expect(page.locator("#settings-name")).toHaveValue(renamed);
+    await expect(page.locator(".inline-error")).toHaveCount(0);
+  } finally {
+    await failedMetadata.close();
+  }
+  await expect(
+    page
+      .locator("#settings-form")
+      .getByLabel("Workspace name", { exact: true }),
+  ).toHaveValue(renamed);
+  await page.evaluate(() => history.replaceState(null, "", "/#overview"));
+  await page.reload();
+  await expect(
+    page
+      .getByRole("combobox", { name: "Switch workspace", exact: true })
+      .locator("option:checked"),
+  ).toHaveText(renamed);
+
+  const second = await browser.newContext({
+    baseURL: new URL(page.url()).origin,
+  });
+  try {
+    await apiLogin(second.request, email, password);
+    await page.getByRole("link", { name: "Your account", exact: true }).click();
+    const otherSession = page
+      .getByRole("listitem")
+      .filter({ hasText: "Signed-in session" })
+      .first();
+    await otherSession
+      .getByRole("button", { name: "End session", exact: true })
+      .click();
+    await page
+      .locator("#confirm-modal")
+      .getByRole("button", { name: "End session", exact: true })
+      .click();
+    await expect(
+      page.getByRole("listitem").filter({ hasText: "Signed-in session" }),
+    ).toHaveCount(0);
+    expect((await second.request.get("/api/auth/me")).status()).toBe(401);
+    await apiLogin(second.request, email, password);
+    await page.getByLabel("Current password", { exact: true }).fill(password);
+    await page.getByLabel("New password", { exact: true }).fill(nextPassword);
+    await page
+      .getByLabel("Confirm new password", { exact: true })
+      .fill(nextPassword);
+    await page
+      .getByRole("button", { name: "Update password", exact: true })
+      .click();
+    await expect(
+      page.getByRole("heading", {
+        name: "Good to have you back.",
+        exact: true,
+      }),
+    ).toBeVisible();
+    expect((await second.request.get("/api/auth/me")).status()).toBe(401);
+    await page
+      .getByRole("textbox", { name: "Email address", exact: true })
+      .fill(email);
+    await page.getByLabel("Password", { exact: true }).fill(password);
+    await page
+      .getByRole("button", { name: "Sign in to Orbit", exact: true })
+      .click();
+    await expect(page.locator("#auth-error")).toBeVisible();
+    await signInThroughUi(page, email, nextPassword);
+    await page.getByRole("link", { name: "Your account", exact: true }).click();
+    await expect(page.getByLabel("Display name", { exact: true })).toHaveValue(
+      "Casey Rivera",
+    );
+    await page
+      .getByRole("listitem")
+      .filter({ hasText: "Current session" })
+      .getByRole("button", { name: "End session", exact: true })
+      .click();
+    await page
+      .locator("#confirm-modal")
+      .getByRole("button", { name: "End session", exact: true })
+      .click();
+    await expect(
+      page.getByRole("heading", {
+        name: "Good to have you back.",
+        exact: true,
+      }),
+    ).toBeVisible();
+    expect(errors).toEqual([]);
+  } finally {
+    await second.close();
+  }
+});
+
+test("real assignment and comment notifications open task links, survive reload, and mark read on mobile", async ({
+  page,
+  browser,
+}) => {
+  const suffix = unique();
+  const email = `actor-${suffix}@example.test`;
+  const recipientEmail = `recipient-${suffix}@example.test`;
+  const password = "OrbitNotify!2026";
+  const title = `Assigned ${suffix}`;
+  const workspaceName = `Inbox ${suffix}`;
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await registerAndCreateWorkspace(page, {
+    email,
+    password,
+    name: "Notification Actor",
+    workspace: workspaceName,
+  });
+  const workspace = await workspaceByName(page.request, workspaceName);
+  const recipient = await browser.newContext({
+    baseURL: new URL(page.url()).origin,
+    viewport: { width: 390, height: 844 },
+  });
+  try {
+    const registered = await recipient.request.post("/api/auth/register", {
+      headers: await csrfHeaders(recipient.request),
+      data: { name: "Notification Recipient", email: recipientEmail, password },
+    });
+    expect(registered.status()).toBe(201);
+    const user = await registered.json();
+    const member = await page.request.post(
+      `/api/workspaces/${workspace.id}/members`,
+      {
+        headers: await csrfHeaders(page.request),
+        data: { email: recipientEmail, role: "MEMBER" },
+      },
+    );
+    expect(member.status()).toBe(201);
+    const projectResponse = await page.request.post(
+      `/api/workspaces/${workspace.id}/projects`,
+      {
+        headers: await csrfHeaders(page.request),
+        data: {
+          name: `Notifications ${suffix}`,
+          description: "A real assignment flow.",
+          color: "#7c6af2",
+        },
+      },
+    );
+    expect(projectResponse.status()).toBe(201);
+    const project = await projectResponse.json();
+    const taskResponse = await page.request.post(
+      `/api/workspaces/${workspace.id}/tasks`,
+      {
+        headers: await csrfHeaders(page.request),
+        data: {
+          title,
+          description: "Follow this work from a real notification.",
+          projectId: project.id,
+          status: "TODO",
+          priority: "MEDIUM",
+          assigneeId: user.id,
+          dueDate: null,
+        },
+      },
+    );
+    expect(taskResponse.status()).toBe(201);
+    const task = await taskResponse.json();
+    const recipientPage = await recipient.newPage();
+    recipientPage.on("pageerror", (error) => errors.push(error.message));
+    await recipientPage.goto("/");
+    await signInThroughUi(recipientPage, recipientEmail, password);
+    await navigateMobile(recipientPage, "Inbox");
+    await expect(recipientPage.locator(".notification-row.unread")).toHaveCount(
+      2,
+    );
+    await recipientPage
+      .locator(".notification-row")
+      .filter({ hasText: "Your workspace access changed" })
+      .getByRole("button", {
+        name: "Mark Your workspace access changed as read",
+        exact: true,
+      })
+      .click();
+    await expect(recipientPage.locator(".notification-row.unread")).toHaveCount(
+      1,
+    );
+    await expectNoPageOverflow(recipientPage);
+    await recipientPage
+      .locator(".notification-row")
+      .filter({ hasText: title })
+      .getByRole("button", { name: "You were assigned a task", exact: true })
+      .click();
+    await expect(
+      dialog(recipientPage).getByLabel("Task name", { exact: true }),
+    ).toHaveValue(title);
+    expect(recipientPage.url()).toContain(`task=${task.id}`);
+    await recipientPage.reload();
+    await expect(
+      dialog(recipientPage).getByLabel("Task name", { exact: true }),
+    ).toHaveValue(title);
+    await dialog(recipientPage)
+      .getByRole("button", { name: "Close dialog", exact: true })
+      .click();
+    const comment = await page.request.post(
+      `/api/workspaces/${workspace.id}/tasks/${task.id}/comments`,
+      {
+        headers: await csrfHeaders(page.request),
+        data: { body: `A useful update ${suffix}` },
+      },
+    );
+    expect(comment.status()).toBe(201);
+    await navigateMobile(recipientPage, "Inbox");
+    await expect(recipientPage.locator(".notification-row")).toHaveCount(3);
+    await expect(recipientPage.locator(".notification-row.unread")).toHaveCount(
+      1,
+    );
+    await recipientPage
+      .getByRole("button", { name: "Mark all as read", exact: true })
+      .click();
+    await expect(recipientPage.locator(".notification-row.unread")).toHaveCount(
+      0,
+    );
+    const inbox = await recipient.request.get("/api/notifications");
+    expect((await inbox.json()).unreadCount).toBe(0);
+    await expectNoPageOverflow(recipientPage);
+    expect(errors).toEqual([]);
+  } finally {
+    await cleanupTask(page.request, workspace.id, title);
+    await recipient.close();
   }
 });
 

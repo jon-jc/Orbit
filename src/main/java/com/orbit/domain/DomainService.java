@@ -24,8 +24,9 @@ import org.springframework.web.server.ResponseStatusException;
 @Transactional(readOnly = true)
 public class DomainService {
     private final JdbcTemplate jdbc;
+    private final NotificationService notifications;
 
-    public DomainService(JdbcTemplate jdbc) { this.jdbc = jdbc; }
+    public DomainService(JdbcTemplate jdbc, NotificationService notifications) { this.jdbc = jdbc; this.notifications = notifications; }
 
     private static final String PROJECT_SELECT = """
             SELECT p.*, (SELECT COUNT(*) FROM task t WHERE t.workspace_id=p.workspace_id AND t.project_id=p.id) AS task_count,
@@ -84,6 +85,7 @@ public class DomainService {
         }
         Member result = member(workspace, user);
         audit(workspace, actor, "added", "member", result.name());
+        notifications.membership(workspace, actor, user, "You were added as a " + readable(input.role().name()) + ".");
         return result;
     }
 
@@ -98,6 +100,7 @@ public class DomainService {
         }
         jdbc.update("UPDATE workspace_member SET role=? WHERE workspace_id=? AND user_id=?", input.role().name(), workspace, user);
         if (before.role() != input.role()) audit(workspace, actor, "changed role of", "member", before.name());
+        if (before.role() != input.role()) notifications.membership(workspace, actor, user, "Your role is now " + readable(input.role().name()) + ".");
         return member(workspace, user);
     }
 
@@ -184,6 +187,7 @@ public class DomainService {
                 VALUES(?,?,?,?,?,?,?,?,?,0,?,?)
                 """, id, workspace, input.projectId(), input.title().strip(), text(input.description()), input.status().name(), input.priority().name(), input.assigneeId(), input.dueDate(), now, now);
         audit(workspace, actor, "created", "task", input.title().strip());
+        notifications.assigned(workspace, id, actor, input.assigneeId(), input.title().strip());
         return taskIn(workspace, id);
     }
 
@@ -201,6 +205,8 @@ public class DomainService {
         if (changed != 1) throw conflict("This task has changed. Refresh it before saving.");
         String action = before.status() != input.status() ? "moved to " + readable(input.status().name()) : "updated";
         audit(workspace, actor, action, "task", input.title().strip());
+        if (!java.util.Objects.equals(before.assigneeId(), input.assigneeId()))
+            notifications.assigned(workspace, id, actor, input.assigneeId(), input.title().strip());
         return taskIn(workspace, id);
     }
 
@@ -232,6 +238,7 @@ public class DomainService {
         String id = id();
         jdbc.update("INSERT INTO task_comment(id,workspace_id,task_id,author_id,body,created_at) VALUES(?,?,?,?,?,?)", id, workspace, task, actor, input.body().strip(), now());
         audit(workspace, actor, "commented on", "task", target.title());
+        notifications.commented(workspace, task, actor, target.assigneeId(), target.title(), input.body());
         return jdbc.query("SELECT c.*,u.display_name AS author_name FROM task_comment c JOIN app_user u ON u.id=c.author_id WHERE c.workspace_id=? AND c.id=?",
                 COMMENT_ROW, workspace, id).get(0);
     }

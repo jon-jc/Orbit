@@ -39,8 +39,33 @@ jobs:
         run: npm run format:check
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
+      - name: Start isolated browser-test mail sink
+        run: |
+          mail_key=$(openssl rand -base64 32)
+          echo "::add-mask::$mail_key"
+          echo "ORBIT_MAIL_ENCRYPTION_KEY=$mail_key" >> "$GITHUB_ENV"
+          docker run -d --name orbit-browser-mailpit \
+            -p 127.0.0.1:1025:1025 -p 127.0.0.1:8025:8025 axllent/mailpit:v1.31.3
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8025/api/v1/messages >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo 'Mailpit did not become ready.' >&2
+          exit 1
       - name: Browser workflow and mobile tests
         run: npm run test:e2e
+        env:
+          SPRING_APPLICATION_JSON: '{"orbit":{"auth":{"rate-limit-enabled":false}}}'
+          ORBIT_MAIL_ENABLED: 'true'
+          ORBIT_MAIL_HOST: 127.0.0.1
+          ORBIT_MAIL_PORT: '1025'
+          ORBIT_MAIL_STARTTLS: 'false'
+          ORBIT_MAIL_FROM: orbit@example.test
+          ORBIT_PUBLIC_BASE_URL: http://127.0.0.1:8080
+          ORBIT_MAILPIT_URL: http://127.0.0.1:8025
+      - name: Stop browser-test mail sink
+        if: always()
+        run: docker rm -f orbit-browser-mailpit 2>/dev/null || true
       - name: Build production image
         run: docker build -t orbit:${{ github.sha }} .
       - uses: actions/upload-artifact@v4

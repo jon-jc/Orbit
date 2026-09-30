@@ -9,7 +9,7 @@ COPY src/ src/
 RUN ./mvnw -B -ntp verify
 
 FROM eclipse-temurin:17-jre-jammy AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 orbit \
     && useradd --uid 10001 --gid orbit --no-create-home --shell /usr/sbin/nologin orbit

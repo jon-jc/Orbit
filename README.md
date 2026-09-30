@@ -231,7 +231,7 @@ RFC ProblemDetail-style errors include `status`, `title`, `detail`, and `request
 
 ## Verification and developer tools
 
-**19 backend test executions passed**: 11 default H2/security tests plus eight shared workflows repeated against PostgreSQL 17. **Two Chromium scenarios passed** for desktop and mobile. These counts are executed checks, not a penetration test or throughput claim.
+**39 backend test executions passed**: 23 H2/security/account/email tests plus 16 shared workflows repeated against PostgreSQL 17. **Two Chromium scenarios passed** for desktop and mobile. These counts are executed checks, not a penetration test or throughput claim.
 
 | Checks | Coverage |
 | --- | --- |
@@ -287,7 +287,9 @@ BCrypt cost 12 protects passwords; registration allows 12–72 characters and at
 
 Registration is open. Rate limits are per instance/IP, proxies can collapse addresses, and replicas do not share counters. Public traffic needs a gateway-wide abuse/signup policy. Activity is an application trail, not a tamper-proof compliance archive.
 
-There is no SSO/MFA, email verification, password recovery, account settings, account/workspace deletion, billing, attachments, realtime sync, invitation email, or external notifications. Workspace selection resets on browser reload and individual tasks do not have deep links. Task deletion is permanent. Exports are synchronous and large workspaces require measurement. No SLA, formal penetration-test result, or automatic disaster-recovery guarantee is claimed.
+There is no SSO/MFA, account/workspace deletion, billing, attachments, realtime sync, invitation email, or external notifications. Workspace selection resets on browser reload and individual tasks do not have deep links. Task deletion is permanent. Exports are synchronous and large workspaces require measurement. No SLA, formal penetration-test result, or automatic disaster-recovery guarantee is claimed.
+
+Account APIs support profile updates, email verification, password recovery, and active-session controls. SMTP delivery uses an encrypted transactional outbox with bounded retries. See [Account security and email](docs/ACCOUNT_SECURITY.md) for setup, migration behavior, and exact endpoints.
 
 ## Operations and troubleshooting
 

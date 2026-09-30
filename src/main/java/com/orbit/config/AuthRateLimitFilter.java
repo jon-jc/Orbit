@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.time.Clock;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
@@ -18,6 +19,9 @@ import org.springframework.web.filter.OncePerRequestFilter;
 /** Bounded per-instance abuse control. In production supplement with a gateway-wide limiter. */
 @Component
 public class AuthRateLimitFilter extends OncePerRequestFilter {
+    private static final Set<String> LIMITED_PATHS = Set.of("/api/auth/login","/api/auth/register",
+            "/api/auth/forgot-password","/api/auth/reset-password","/api/auth/verify-email","/api/auth/resend-verification",
+            "/api/account/password","/api/account/verification");
     private final Map<String, Window> attempts = new HashMap<>();
     private final boolean enabled;
     private final Clock clock;
@@ -38,7 +42,7 @@ public class AuthRateLimitFilter extends OncePerRequestFilter {
     }
     @Override protected void doFilterInternal(HttpServletRequest request,HttpServletResponse response,FilterChain chain) throws ServletException,IOException {
         String path=request.getServletPath();
-        if (enabled && "POST".equals(request.getMethod()) && ("/api/auth/login".equals(path) || "/api/auth/register".equals(path))
+        if (enabled && "POST".equals(request.getMethod()) && LIMITED_PATHS.contains(path)
                 && !allow(request.getRemoteAddr())) {
             response.setHeader("Retry-After","60");
             JsonErrors.write(response,429,"Too many requests","Too many sign-in attempts. Try again in a minute."); return;

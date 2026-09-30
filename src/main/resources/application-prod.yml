@@ -15,6 +15,13 @@ management:
 orbit:
   demo:
     enabled: false
+  accounts:
+    registration-enabled: ${ORBIT_REGISTRATION_ENABLED:true}
+    email-verification-required: ${ORBIT_EMAIL_VERIFICATION_REQUIRED:true}
+    public-base-url: ${ORBIT_PUBLIC_BASE_URL}
+    reset-token-ttl: 30m
+    verification-token-ttl: 24h
+    token-send-cooldown: 1m
 logging:
   structured:
     format:

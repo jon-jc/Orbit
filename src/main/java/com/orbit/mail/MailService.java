@@ -49,6 +49,21 @@ public class MailService {
 
     @Transactional
     public void enqueue(String to, String subject, String body) {
+        enqueueInternal(to, subject, body, null, null, null);
+    }
+
+    @Transactional
+    public void enqueueAction(String to, String subject, String body, String actionType,
+            String actionHash, OffsetDateTime expiresAt) {
+        if (!("ACCOUNT".equals(actionType) || "INVITATION".equals(actionType))
+                || actionHash == null || !actionHash.matches("[a-f0-9]{64}") || expiresAt == null) {
+            throw new IllegalArgumentException("Invalid email action metadata.");
+        }
+        enqueueInternal(to, subject, body, actionType, actionHash, expiresAt);
+    }
+
+    private void enqueueInternal(String to, String subject, String body, String actionType,
+            String actionHash, OffsetDateTime expiresAt) {
         if (!enabled) return;
         validateAddress(to);
         if (subject == null || subject.isBlank() || subject.length() > 200
@@ -61,9 +76,10 @@ public class MailService {
         String id = UUID.randomUUID().toString();
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         jdbc.update("""
-                INSERT INTO mail_outbox(id,recipient,subject,encrypted_body,status,created_at,next_attempt_at)
-                VALUES(?,?,?,?,'PENDING',?,?)
-                """, id, to, subject, encrypt(id, to, subject, body), now, now);
+                INSERT INTO mail_outbox(id,recipient,subject,encrypted_body,status,created_at,next_attempt_at,
+                    action_type,action_hash,expires_at)
+                VALUES(?,?,?,?,'PENDING',?,?,?,?,?)
+                """, id, to, subject, encrypt(id, to, subject, body), now, now, actionType, actionHash, expiresAt);
     }
 
     boolean enabled() { return enabled; }

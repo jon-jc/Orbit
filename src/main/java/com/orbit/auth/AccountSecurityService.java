@@ -160,7 +160,7 @@ public class AccountSecurityService {
         String body = reset ? "A password reset was requested for your Orbit account. Open this link to choose a new password:\n\n"
                 : "Welcome to Orbit. Verify your email address by opening this link:\n\n";
         body += url + "\n\nThis link expires in " + ttl.toMinutes() + " minutes and can be used once. If you did not request this, you can ignore this email.\n\nOrbit";
-        mail.enqueue(account.email(),subject,body);
+        mail.enqueueAction(account.email(),subject,body,"ACCOUNT",hash(token),now.plus(ttl));
         event(account.id(),reset ? "PASSWORD_RESET_REQUESTED" : "VERIFICATION_REQUESTED");
     }
 

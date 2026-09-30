@@ -35,8 +35,10 @@ public class MailDispatcher {
 
     @Scheduled(fixedDelayString = "${orbit.mail.dispatch-delay-ms:5000}", initialDelayString = "${orbit.mail.dispatch-delay-ms:5000}")
     public void dispatch() {
-        if (!mail.enabled()) return;
         OffsetDateTime now = now();
+        jdbc.update("DELETE FROM mail_outbox WHERE (status='SENT' AND sent_at<?) OR (status='CANCELLED' AND created_at<?)",
+                now.minusDays(7), now.minusDays(7));
+        if (!mail.enabled()) return;
         List<String> candidates = jdbc.query("""
                 SELECT id FROM mail_outbox WHERE (status='PENDING' AND next_attempt_at<=?)
                 OR (status='SENDING' AND claimed_at<?) ORDER BY created_at,id LIMIT 10
@@ -45,6 +47,12 @@ public class MailDispatcher {
             Delivery delivery = transactions.execute(transaction -> claim(id));
             if (delivery == null) continue;
             try {
+                if (!actionUsable(delivery)) {
+                    int cancelled = jdbc.update("UPDATE mail_outbox SET status='CANCELLED',last_error=NULL WHERE id=? AND status='SENDING' AND claimed_at=?",
+                            id, delivery.claimedAt());
+                    if (cancelled == 1) metrics.counter("orbit.mail.delivery", "result", "cancelled").increment();
+                    continue;
+                }
                 var message = new SimpleMailMessage();
                 message.setFrom(mail.from());
                 message.setTo(delivery.recipient());
@@ -66,7 +74,20 @@ public class MailDispatcher {
                 LOG.warn("Email delivery {} failed on attempt {}; inspect outbox status and SMTP configuration.", id, attempts);
             }
         }
-        jdbc.update("DELETE FROM mail_outbox WHERE status='SENT' AND sent_at<?", now.minusDays(7));
+    }
+
+    private boolean actionUsable(Delivery delivery) {
+        if (delivery.actionType() == null) return true;
+        OffsetDateTime now = now();
+        if (!delivery.expiresAt().isAfter(now)) return false;
+        String query = "ACCOUNT".equals(delivery.actionType())
+                ? "SELECT COUNT(*) FROM account_token WHERE token_hash=? AND consumed_at IS NULL AND expires_at>?"
+                : """
+                  SELECT COUNT(*) FROM workspace_invitation i JOIN workspace_member m
+                    ON m.workspace_id=i.workspace_id AND m.user_id=i.invited_by AND m.role='OWNER'
+                  WHERE i.token_hash=? AND i.accepted_at IS NULL AND i.revoked_at IS NULL AND i.expires_at>?
+                  """;
+        return jdbc.queryForObject(query, Long.class, delivery.actionHash(), now) == 1;
     }
 
     private Delivery claim(String id) {
@@ -76,9 +97,10 @@ public class MailDispatcher {
                 WHERE id=? AND ((status='PENDING' AND next_attempt_at<=?) OR (status='SENDING' AND claimed_at<?))
                 """, claimedAt, id, claimedAt, claimedAt.minusMinutes(5));
         if (changed != 1) return null;
-        return jdbc.queryForObject("SELECT recipient,subject,encrypted_body,attempts,claimed_at FROM mail_outbox WHERE id=?",
+        return jdbc.queryForObject("SELECT recipient,subject,encrypted_body,attempts,claimed_at,action_type,action_hash,expires_at FROM mail_outbox WHERE id=?",
                 (row, index) -> new Delivery(row.getString(1), row.getString(2), row.getString(3), row.getInt(4),
-                        row.getObject(5, OffsetDateTime.class)), id);
+                        row.getObject(5, OffsetDateTime.class), row.getString(6), row.getString(7),
+                        row.getObject(8, OffsetDateTime.class)), id);
     }
 
     private double pending() {
@@ -87,5 +109,6 @@ public class MailDispatcher {
     }
 
     private static OffsetDateTime now() { return OffsetDateTime.now(ZoneOffset.UTC); }
-    private record Delivery(String recipient, String subject, String encryptedBody, int attempts, OffsetDateTime claimedAt) { }
+    private record Delivery(String recipient, String subject, String encryptedBody, int attempts,
+            OffsetDateTime claimedAt, String actionType, String actionHash, OffsetDateTime expiresAt) { }
 }

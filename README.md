@@ -231,7 +231,7 @@ RFC ProblemDetail-style errors include `status`, `title`, `detail`, and `request
 
 ## Verification and developer tools
 
-**39 backend test executions passed**: 23 H2/security/account/email tests plus 16 shared workflows repeated against PostgreSQL 17. **Two Chromium scenarios passed** for desktop and mobile. These counts are executed checks, not a penetration test or throughput claim.
+**41 backend test executions passed**: 25 H2/security/account/email tests plus 16 shared workflows repeated against PostgreSQL 17. **Two Chromium scenarios passed** for desktop and mobile. These counts are executed checks, not a penetration test or throughput claim.
 
 | Checks | Coverage |
 | --- | --- |

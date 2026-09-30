@@ -40,6 +40,7 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.web.server.ResponseStatusException;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request;
@@ -66,11 +67,13 @@ abstract class AccountSecurityContract {
     @BeforeEach
     void captureDeliveryIntent() {
         letters.clear();
-        doAnswer(invocation -> {
+        org.mockito.stubbing.Answer<Object> capture = invocation -> {
             String to = invocation.getArgument(0);
             letters.computeIfAbsent(to,key -> new CopyOnWriteArrayList<>()).add(new Letter(invocation.getArgument(1),invocation.getArgument(2)));
             return null;
-        }).when(mail).enqueue(anyString(),anyString(),anyString());
+        };
+        doAnswer(capture).when(mail).enqueue(anyString(),anyString(),anyString());
+        doAnswer(capture).when(mail).enqueueAction(anyString(),anyString(),anyString(),anyString(),anyString(),any(OffsetDateTime.class));
     }
 
     @Test

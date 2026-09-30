@@ -4,6 +4,7 @@ import java.security.SecureRandom;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Base64;
+import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
@@ -119,5 +120,49 @@ class MailOutboxTest {
         assertThat(jdbc.queryForObject("SELECT status FROM mail_outbox", String.class)).isEqualTo("FAILED");
         assertThat(jdbc.queryForObject("SELECT last_error FROM mail_outbox", String.class))
                 .doesNotContain("reset-token");
+    }
+
+    @Test
+    void expiredReplacedAndConsumedActionLinksAreCancelledBeforeSmtp() {
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        mail.enqueueAction("person@example.test", "Expired link", "expired-token", "ACCOUNT", "a".repeat(64), now.minusSeconds(1));
+        mail.enqueueAction("person@example.test", "Replaced link", "replaced-token", "ACCOUNT", "b".repeat(64), now.plusHours(1));
+        String user = UUID.randomUUID().toString();
+        jdbc.update("INSERT INTO app_user(id,email,display_name,password_hash) VALUES(?,?,?,?)",
+                user, user + "@example.test", "Test person", "unused-test-hash");
+        jdbc.update("INSERT INTO account_token(id,user_id,purpose,token_hash,expires_at,created_at,consumed_at) VALUES(?,?,'VERIFY_EMAIL',?,?,?,?)",
+                UUID.randomUUID().toString(), user, "c".repeat(64), now.plusHours(1), now, now);
+        mail.enqueueAction("person@example.test", "Used link", "used-token", "ACCOUNT", "c".repeat(64), now.plusHours(1));
+        jdbc.update("UPDATE mail_outbox SET next_attempt_at=? WHERE status='PENDING'", now.minusMinutes(1));
+        dispatcher.dispatch();
+        verify(sender, times(0)).send(any(SimpleMailMessage.class));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM mail_outbox WHERE status='CANCELLED'", Long.class))
+                .withFailMessage("Action queue states at %s: %s", OffsetDateTime.now(ZoneOffset.UTC), jdbc.queryForList("SELECT subject,status,attempts,next_attempt_at,claimed_at,last_error FROM mail_outbox"))
+                .isEqualTo(3);
+
+        jdbc.update("INSERT INTO account_token(id,user_id,purpose,token_hash,expires_at,created_at) VALUES(?,?,'RESET_PASSWORD',?,?,?)",
+                UUID.randomUUID().toString(), user, "d".repeat(64), now.plusHours(1), now);
+        mail.enqueueAction("person@example.test", "Current link", "current-token", "ACCOUNT", "d".repeat(64), now.plusHours(1));
+        jdbc.update("UPDATE mail_outbox SET next_attempt_at=? WHERE status='PENDING'", now.minusMinutes(1));
+        dispatcher.dispatch();
+        verify(sender, times(1)).send(any(SimpleMailMessage.class));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM mail_outbox WHERE status='SENT'", Long.class)).isEqualTo(1);
+        jdbc.update("DELETE FROM account_token WHERE user_id=?", user);
+        jdbc.update("DELETE FROM app_user WHERE id=?", user);
+    }
+
+    @Test
+    void terminalRetentionRunsWhenDeliveryIsDisabledAndPreservesPendingMail() {
+        OffsetDateTime old = OffsetDateTime.now(ZoneOffset.UTC).minusDays(8);
+        mail.enqueue("person@example.test", "Old sent mail", "body");
+        jdbc.update("UPDATE mail_outbox SET status='SENT',sent_at=?", old);
+        mail.enqueue("person@example.test", "Old cancelled mail", "body");
+        jdbc.update("UPDATE mail_outbox SET status='CANCELLED',created_at=? WHERE status='PENDING'", old);
+        mail.enqueue("person@example.test", "Pending mail", "body");
+        MailService disabled = new MailService(jdbc, false, "", "");
+        new MailDispatcher(jdbc, disabled, sender, transactionManager,
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry()).dispatch();
+        verify(sender, times(0)).send(any(SimpleMailMessage.class));
+        assertThat(jdbc.queryForList("SELECT status FROM mail_outbox", String.class)).containsExactly("PENDING");
     }
 }

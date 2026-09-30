@@ -33,7 +33,8 @@ abstract class WorkflowContract {
     @Test
     void authenticationRequiresCsrfRotatesTheSessionAndLogoutRevokesIt() throws Exception {
         Client client = anonymous();
-        call(client, "GET", "/api/auth/me", null, 401);
+        MvcResult unauthorized=call(client, "GET", "/api/auth/me", null, 401);
+        assertThat(string(unauthorized,"$.requestId")).isEqualTo(unauthorized.getResponse().getHeader("X-Request-ID"));
         call(client, "GET", "/api/workspaces", null, 401);
         String email = uniqueEmail();
         call(client, "POST", "/api/auth/register", json("name", "Alex Test", "email", email, "password", PASSWORD), 201);

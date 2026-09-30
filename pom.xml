@@ -26,7 +26,7 @@
   <build><plugins>
     <plugin><groupId>org.springframework.boot</groupId><artifactId>spring-boot-maven-plugin</artifactId></plugin>
     <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><configuration><excludes><exclude>**/*PostgresIT.java</exclude></excludes></configuration></plugin>
-    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-enforcer-plugin</artifactId><version>3.6.2</version><executions><execution><id>require-java</id><goals><goal>enforce</goal></goals><configuration><rules><requireJavaVersion><version>[17,)</version></requireJavaVersion><requireMavenVersion><version>[3.6.3,)</version></requireMavenVersion></rules></configuration></execution></executions></plugin>
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-enforcer-plugin</artifactId><version>3.6.3</version><executions><execution><id>require-java</id><goals><goal>enforce</goal></goals><configuration><rules><requireJavaVersion><version>[17,)</version></requireJavaVersion><requireMavenVersion><version>[3.6.3,)</version></requireMavenVersion></rules></configuration></execution></executions></plugin>
   </plugins></build>
   <profiles><profile><id>postgres-tests</id><build><plugins><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-failsafe-plugin</artifactId><executions><execution><goals><goal>integration-test</goal><goal>verify</goal></goals></execution></executions><configuration><includes><include>**/*PostgresIT.java</include></includes><systemPropertyVariables><orbit.postgres.tests>true</orbit.postgres.tests></systemPropertyVariables></configuration></plugin></plugins></build></profile></profiles>
 </project>

@@ -1,0 +1,20 @@
+{
+  "name": "orbit-browser-verification",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Development-only browser regression checks for the Spring Boot Orbit product",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "format": "prettier --write \"src/main/resources/static/**/*.{js,css,html}\" \"e2e/**/*.js\" playwright.config.js package.json",
+    "format:check": "prettier --check \"src/main/resources/static/**/*.{js,css,html}\" \"e2e/**/*.js\" playwright.config.js package.json"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "prettier": "3.9.9"
+  }
+}

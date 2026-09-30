@@ -63,6 +63,11 @@ const paths = {
   archive:
     '<rect x="3" y="3" width="18" height="4" rx="1"/><path d="M5 7v14h14V7M9 11h6"/>',
   alert: '<path d="m12 3 10 18H2L12 3Z"/><path d="M12 9v5m0 3v.5"/>',
+  settings:
+    '<path d="m9 3-1 3-3 1v4l2 1-1 3 3 3 3-1 1 2h4l1-3 3-1v-4l-2-1 1-3-3-3-3 1-1-2H9Z"/><circle cx="12" cy="12" r="3"/>',
+  bell: '<path d="M5 17h14l-2-3V9a5 5 0 0 0-10 0v5l-2 3Zm5 4h4"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+  link: '<path d="m9 15 6-6M8 9l-3 3a4 4 0 0 0 6 6l3-3m-4-6 3-3a4 4 0 0 1 6 6l-3 3"/>',
 };
 const icon = (name) =>
   `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.layers}</svg>`;
@@ -101,7 +106,88 @@ const state = {
   request: 0,
   modalRequest: 0,
   taskModal: null,
+  registrationEnabled: true,
+  emailVerificationRequired: false,
+  account: null,
+  notifications: null,
+  invitations: [],
+  unreadNotifications: 0,
+  mailEnabled: false,
+  pendingInvite: null,
+  sessions: [],
 };
+const PAGES = [
+  "overview",
+  "projects",
+  "tasks",
+  "team",
+  "activity",
+  "account",
+  "settings",
+  "notifications",
+];
+function route() {
+  const [page, query = ""] = location.hash.replace(/^#/, "").split("?");
+  const params = new URLSearchParams(query);
+  const outside = new URLSearchParams(location.search);
+  if (outside.has("resetToken"))
+    return {
+      page: "reset-password",
+      token: outside.get("resetToken"),
+      workspace: null,
+      task: null,
+    };
+  if (outside.has("verifyToken"))
+    return {
+      page: "verify-email",
+      token: outside.get("verifyToken"),
+      workspace: null,
+      task: null,
+    };
+  if (outside.has("inviteToken"))
+    return {
+      page: "invite",
+      token: outside.get("inviteToken"),
+      workspace: null,
+      task: null,
+    };
+  return {
+    page: page || "overview",
+    workspace: params.get("workspace"),
+    task: params.get("task"),
+    token: params.get("token"),
+  };
+}
+function rememberedWorkspace() {
+  try {
+    return localStorage.getItem(`orbit.workspace.${state.user.id}`);
+  } catch {
+    return null;
+  }
+}
+function rememberWorkspace() {
+  if (!state.user || !state.workspace) return;
+  try {
+    localStorage.setItem(
+      `orbit.workspace.${state.user.id}`,
+      state.workspace.id,
+    );
+  } catch {
+    /* Storage may be disabled; URL links still work. */
+  }
+}
+function writeRoute(page = state.page, task = null, replace = true) {
+  const params = new URLSearchParams();
+  if (state.workspace) params.set("workspace", state.workspace.id);
+  if (task) params.set("task", task);
+  const hash = `#${page}${params.size ? `?${params}` : ""}`;
+  const url = `${location.pathname}${hash}`;
+  if (replace) history.replaceState(null, "", url);
+  else history.pushState(null, "", url);
+}
+function clearTokenRoute() {
+  history.replaceState(null, "", location.pathname);
+}
 const writable = () => state.workspace && state.workspace.role !== "VIEWER";
 const owner = () => state.workspace?.role === "OWNER";
 const base = () => `/api/workspaces/${encodeURIComponent(state.workspace.id)}`;
@@ -240,12 +326,21 @@ function empty(title, copy, action = "", label = "", name = "layers") {
 function pageHeader(title, subtitle, actions = "", eyebrow = "") {
   return `<div class="page-header"><div>${eyebrow ? `<div class="eyebrow">${esc(eyebrow)}</div>` : ""}<h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div>${actions ? `<div class="page-header-actions">${actions}</div>` : ""}</div>`;
 }
-function authView(mode = "login") {
+function authLayout(content) {
+  return `<div class="auth-layout"><section class="auth-story" aria-label="About Orbit"><div class="brand"><div class="orbit-mark" aria-hidden="true"></div>orbit</div><div class="auth-story-content"><div class="eyebrow">A little clarity goes a long way</div><h1>Great work.<br>Better rhythm.<br><em>Your orbit.</em></h1><p>A thoughtful home for your projects, your people, and the next thing that matters.</p><div class="auth-orbits" aria-hidden="true"><div class="orbital-path"></div><div class="orbital-path"></div><div class="orbital-sun"></div><div class="orbital-moon"></div><div class="orbital-tag">${icon("checkCircle")}Room to do your best work</div></div></div><div class="auth-story-footer"><span>Built for teams that care.</span><span>WORK, IN FOCUS.</span></div></section><main class="auth-form-side"><div class="auth-form-wrap">${content}</div></main></div>`;
+}
+function authView(mode = "login", invitedEmail = "") {
+  state.request++;
   state.user = null;
   state.workspace = null;
   state.taskModal = null;
   modal.close();
-  app.innerHTML = `<div class="auth-layout"><section class="auth-story" aria-label="About Orbit"><div class="brand"><div class="orbit-mark" aria-hidden="true"></div>orbit</div><div class="auth-story-content"><div class="eyebrow">A little clarity goes a long way</div><h1>Great work.<br>Better rhythm.<br><em>Your orbit.</em></h1><p>A thoughtful home for your projects, your people, and the next thing that matters.</p><div class="auth-orbits" aria-hidden="true"><div class="orbital-path"></div><div class="orbital-path"></div><div class="orbital-sun"></div><div class="orbital-moon"></div><div class="orbital-tag">${icon("checkCircle")}Room to do your best work</div></div></div><div class="auth-story-footer"><span>Built for teams that care.</span><span>WORK, IN FOCUS.</span></div></section><main class="auth-form-side"><div class="auth-form-wrap"><div class="eyebrow">Welcome to your workspace</div><h2>${mode === "register" ? "Make room for great work." : "Good to have you back."}</h2><p>${mode === "register" ? "Start with an account. Build your workspace from there." : "Sign in and pick up where your team left off."}</p><div class="auth-tabs" role="group" aria-label="Account access"><button data-action="auth-login" class="${mode === "login" ? "active" : ""}">Sign in</button><button data-action="auth-register" class="${mode === "register" ? "active" : ""}">Create account</button></div><form id="auth-form" class="auth-form">${mode === "register" ? '<div class="field"><label for="auth-name">Your name</label><input id="auth-name" name="name" required maxlength="100" autocomplete="name" placeholder="Alex Morgan"></div>' : ""}<div class="field"><label for="auth-email">Email address</label><input id="auth-email" name="email" type="email" required maxlength="254" autocomplete="username" placeholder="you@yourteam.com"></div><div class="field"><label for="auth-password">Password</label><input id="auth-password" name="password" type="password" required ${mode === "register" ? 'minlength="12" ' : ""}maxlength="72" autocomplete="${mode === "register" ? "new-password" : "current-password"}" placeholder="${mode === "register" ? "At least 12 characters" : "Your password"}">${mode === "register" ? "<small>Use 12–72 characters. A memorable phrase works well.</small>" : ""}</div><div id="auth-error" class="auth-error" role="alert" hidden></div><button class="primary" type="submit">${mode === "register" ? "Create your account" : "Sign in to Orbit"}${icon("arrow")}</button></form>${state.demo ? `<div class="auth-divider">OR, TAKE A LOOK AROUND</div><button class="demo-button" data-action="demo">${icon("sparkles")}Explore the demo workspace</button><p class="auth-footnote">A working studio, ready to explore.<br>Demo changes are shared and saved locally.</p>` : '<p class="auth-footnote">Your workspace, securely within reach.</p>'}<div id="auth-status" class="auth-status" role="status"></div></div></main></div>`;
+  const canRegister = state.registrationEnabled;
+  if (mode === "register" && !canRegister) mode = "login";
+  const invitation = state.pendingInvite?.preview;
+  app.innerHTML = authLayout(
+    `<div class="eyebrow">Welcome to your workspace</div><h2>${mode === "register" ? "Make room for great work." : "Good to have you back."}</h2><p>${invitation ? `Sign in with ${esc(invitation.email)} to join ${esc(invitation.workspaceName)}.` : mode === "register" ? "Start with an account. Build your workspace from there." : "Sign in and pick up where your team left off."}</p><div class="auth-tabs" role="group" aria-label="Account access"><button data-action="auth-login" class="${mode === "login" ? "active" : ""}">Sign in</button>${canRegister ? `<button data-action="auth-register" class="${mode === "register" ? "active" : ""}">Create account</button>` : ""}</div><form id="auth-form" class="auth-form">${mode === "register" ? '<div class="field"><label for="auth-name">Your name</label><input id="auth-name" name="name" required maxlength="100" autocomplete="name" placeholder="Alex Morgan"></div>' : ""}<div class="field"><label for="auth-email">Email address</label><input id="auth-email" name="email" type="email" required maxlength="254" autocomplete="username" placeholder="you@yourteam.com" value="${esc(invitedEmail || invitation?.email || "")}"></div><div class="field"><label for="auth-password">Password</label><input id="auth-password" name="password" type="password" required ${mode === "register" ? 'minlength="12" ' : ""}maxlength="72" autocomplete="${mode === "register" ? "new-password" : "current-password"}" placeholder="${mode === "register" ? "At least 12 characters" : "Your password"}">${mode === "register" ? "<small>Use 12–72 characters. Emoji can reach the size limit sooner.</small>" : ""}</div><div id="auth-error" class="auth-error" role="alert" hidden></div><button class="primary" type="submit">${mode === "register" ? "Create your account" : "Sign in to Orbit"}${icon("arrow")}</button></form>${mode === "login" && state.mailEnabled ? '<div class="auth-help"><button class="text-button" data-action="forgot-password">Forgot your password?</button><button class="text-button" data-action="resend-verification">Resend verification</button></div>' : ""}${state.demo && !invitation ? `<div class="auth-divider">OR, TAKE A LOOK AROUND</div><button class="demo-button" data-action="demo">${icon("sparkles")}Explore the demo workspace</button><p class="auth-footnote">A working studio, ready to explore.<br>Demo changes are shared and saved locally.</p>` : `<p class="auth-footnote">${canRegister ? "Your workspace, securely within reach." : "New accounts are managed by your administrator."}</p>`}<div id="auth-status" class="auth-status" role="status"></div>`,
+  );
   $("#auth-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -253,15 +348,30 @@ function authView(mode = "login") {
     setBusy(form, true);
     $("#auth-error").hidden = true;
     try {
-      if (mode === "register")
+      if (mode === "register") {
+        validatePassword(values.password);
         await api("/api/auth/register", { method: "POST", body: values });
+        if (state.emailVerificationRequired) {
+          authNotice(
+            "Check your inbox.",
+            "Confirm your email address with the link we sent, then sign in to get started.",
+            values.email,
+          );
+          return;
+        }
+      }
       state.user = await api("/api/auth/login", {
         method: "POST",
         body: { email: values.email, password: values.password },
       });
       await csrf();
       await loadWorkspaces();
-      if (mode === "register" && !state.workspaces.length) workspaceForm();
+      if (
+        mode === "register" &&
+        !state.workspaces.length &&
+        route().page !== "invite"
+      )
+        workspaceForm();
     } catch (error) {
       if ($("#auth-error")) {
         $("#auth-error").textContent = error.message;
@@ -271,7 +381,117 @@ function authView(mode = "login") {
       if (form.isConnected) setBusy(form, false);
     }
   });
+  $("#auth-name, #auth-email")?.focus({ preventScroll: true });
 }
+function validatePassword(password) {
+  if (password.length < 12 || new TextEncoder().encode(password).length > 72)
+    throw new Error(
+      "Use at least 12 characters within the password size limit. Try fewer emoji or accented characters for a very long password.",
+    );
+}
+function authNotice(title, copy, email = "") {
+  app.innerHTML = authLayout(
+    `<div class="eyebrow">A little account care</div><h2>${esc(title)}</h2><p>${esc(copy)}</p>${email ? `<div class="account-email">${icon("mail")}<span>${esc(email)}</span></div>` : ""}<button class="primary auth-wide" data-action="auth-login">Back to sign in ${icon("arrow")}</button>${state.mailEnabled ? `<button class="text-button" data-action="resend-verification" data-email="${esc(email)}">Need a new verification link?</button>` : ""}<div id="auth-status" class="auth-status" role="status"></div>`,
+  );
+}
+function recoveryForm(kind = "forgot-password", initialEmail = "") {
+  if (!state.mailEnabled) {
+    app.innerHTML = authLayout(
+      '<div class="eyebrow">Account care</div><h2>Email delivery needs a little setup.</h2><p>Account emails are currently unavailable. Ask an administrator to enable email delivery, then request a fresh link.</p><button class="primary" data-action="auth-login">Back to sign in ' +
+        icon("arrow") +
+        "</button>",
+    );
+    return;
+  }
+  const verification = kind === "resend-verification";
+  app.innerHTML = authLayout(
+    `<div class="eyebrow">${verification ? "Confirm your email" : "Find your way back"}</div><h2>${verification ? "Request a fresh link." : "We’ll help you get back in."}</h2><p>${verification ? "Request a new email verification link for your Orbit account." : "Enter your account email. We’ll send a link to choose a new password."}</p><form id="recovery-form" class="auth-form"><div class="field"><label for="recovery-email">Email address</label><input id="recovery-email" name="email" type="email" required maxlength="254" autocomplete="email" placeholder="you@yourteam.com" value="${esc(initialEmail)}"></div><div class="auth-error" data-form-error role="alert" tabindex="-1" hidden></div><button class="primary" type="submit">${verification ? "Send verification link" : "Send reset link"} ${icon("mail")}</button></form><div id="recovery-status" class="auth-status" role="status"></div><button class="text-button" data-action="auth-login">Back to sign in ${icon("arrow")}</button>`,
+  );
+  $("#recovery-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    setBusy(form, true);
+    $("[data-form-error]", form).hidden = true;
+    try {
+      const result = await api(
+        verification
+          ? "/api/auth/resend-verification"
+          : "/api/auth/forgot-password",
+        {
+          method: "POST",
+          body: { email: new FormData(form).get("email").trim() },
+        },
+      );
+      $("#recovery-status").textContent =
+        `${result.message} Check your inbox; another link can be sent after a minute.`;
+      form.reset();
+    } catch (error) {
+      formError(error, form);
+    } finally {
+      if (form.isConnected) setBusy(form, false);
+    }
+  });
+  $("#recovery-email")?.focus({ preventScroll: true });
+}
+function tokenForm(kind, token) {
+  const reset = kind === "reset-password";
+  if (!token) {
+    app.innerHTML = authLayout(
+      `<div class="eyebrow">A small interruption</div><h2>This link needs another try.</h2><p>The link is incomplete. Request a fresh email to continue.</p><button class="primary" data-action="${reset ? "forgot-password" : "resend-verification"}">Request a new link ${icon("mail")}</button>`,
+    );
+    return;
+  }
+  app.innerHTML = authLayout(
+    `<div class="eyebrow">${reset ? "A fresh start" : "One quick step"}</div><h2>${reset ? "Choose your new password." : "Confirm it’s really you."}</h2><p>${reset ? "A memorable phrase makes a strong password. You’ll sign in again after saving." : "Verify your email address and bring your workspace into focus."}</p><form id="token-form" class="auth-form">${reset ? '<div class="field"><label for="reset-password">New password</label><input id="reset-password" name="password" type="password" required minlength="12" maxlength="72" autocomplete="new-password"></div><div class="field"><label for="reset-confirm">Confirm new password</label><input id="reset-confirm" name="confirmation" type="password" required minlength="12" maxlength="72" autocomplete="new-password"></div>' : ""}<div class="auth-error" data-form-error role="alert" tabindex="-1" hidden></div><button class="primary" type="submit">${reset ? "Save new password" : "Verify my email"} ${icon("shield")}</button></form><button class="text-button" data-action="${reset ? "forgot-password" : "resend-verification"}">Need a new link?</button>`,
+  );
+  $("#token-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = Object.fromEntries(new FormData(form));
+    setBusy(form, true);
+    $("[data-form-error]", form).hidden = true;
+    try {
+      if (reset) {
+        validatePassword(values.password);
+        if (values.password !== values.confirmation)
+          throw new Error("The passwords need to match.");
+      }
+      await api(reset ? "/api/auth/reset-password" : "/api/auth/verify-email", {
+        method: "POST",
+        body: reset ? { token, password: values.password } : { token },
+      });
+      clearTokenRoute();
+      if (reset) {
+        await signedOut("Your password is updated. Sign in with the new one.");
+      } else {
+        if (state.user) state.user = await api("/api/auth/me");
+        app.innerHTML = authLayout(
+          `<div class="eyebrow">All confirmed</div><h2>Your email is verified.</h2><p>You’re ready for your next good thing.</p><button class="primary" data-action="auth-continue">${state.user ? "Continue to Orbit" : "Sign in to Orbit"} ${icon("arrow")}</button>`,
+        );
+      }
+    } catch (error) {
+      formError(error, form);
+    } finally {
+      if (form.isConnected) setBusy(form, false);
+    }
+  });
+  $("#token-form input, #token-form button[type='submit']")?.focus({
+    preventScroll: true,
+  });
+}
+async function specialRoute() {
+  const current = route();
+  if (current.page === "reset-password" || current.page === "verify-email") {
+    tokenForm(current.page, current.token);
+    return true;
+  }
+  if (current.page === "invite") {
+    await invitationScreen(current.token);
+    return true;
+  }
+  return false;
+}
+
 function setBusy(form, busy) {
   form
     .querySelectorAll('button[type="submit"],button.primary')
@@ -302,20 +522,30 @@ async function demoLogin() {
 }
 async function loadWorkspaces() {
   state.workspaces = await api("/api/workspaces");
-  const oldId = state.workspace?.id;
+  if (state.pendingInvite && route().page !== "invite") {
+    const params = new URLSearchParams({ token: state.pendingInvite.token });
+    history.replaceState(null, "", `${location.pathname}#invite?${params}`);
+  }
+  if (await specialRoute()) return;
+  const current = route();
+  const oldId =
+    current.workspace || state.workspace?.id || rememberedWorkspace();
   state.workspace =
     state.workspaces.find((w) => w.id === oldId) || state.workspaces[0] || null;
-  state.page = ["overview", "projects", "tasks", "team", "activity"].includes(
-    location.hash.slice(1),
-  )
-    ? location.hash.slice(1)
-    : "overview";
+  state.page = PAGES.includes(current.page) ? current.page : "overview";
+  rememberWorkspace();
+  writeRoute(state.page, current.task);
   shell();
-  if (state.workspace) await loadWorkspace();
+  if (state.workspace) {
+    await loadWorkspace();
+    if (current.task) await openTask(current.task, false);
+  } else if (["account", "notifications"].includes(state.page))
+    await loadPage();
   else
     $("#page-content").innerHTML =
       pageHeader("A fresh start.", "Your best work needs a place to begin.") +
       `<div class="panel">${empty("Welcome to Orbit", "Create a workspace, add your projects, and bring your team into the picture.", "workspace-create", "Create a workspace", "sparkles")}</div>`;
+  refreshUnread();
 }
 function shell() {
   const nav = [
@@ -324,8 +554,11 @@ function shell() {
     ["tasks", "tasks", "My workspace"],
     ["team", "people", "Team"],
     ["activity", "activity", "Activity"],
+    ["notifications", "bell", "Inbox"],
+    ["settings", "settings", "Workspace settings"],
+    ["account", "shield", "Your account"],
   ];
-  app.innerHTML = `<div class="app-shell"><button class="mobile-overlay" data-action="menu-close" aria-label="Close navigation"></button><aside id="workspace-navigation" class="sidebar" aria-label="Workspace navigation"><div class="brand"><div class="orbit-mark" aria-hidden="true"></div>orbit<span>WORKSPACE</span></div><div class="workspace-picker"><div class="workspace-monogram">${esc(initials(state.workspace?.name || "O"))}</div><label class="sr-only" for="workspace-select">Switch workspace</label><select id="workspace-select">${state.workspaces.length ? state.workspaces.map((w) => `<option value="${esc(w.id)}"${w.id === state.workspace?.id ? " selected" : ""}>${esc(w.name)}</option>`).join("") : "<option>Your workspace</option>"}</select></div><p class="sidebar-label">YOUR SPACE</p><nav class="nav">${nav.map(([key, i, label]) => `<a href="#${key}" data-page="${key}" class="${state.page === key ? "active" : ""}"${state.page === key ? ' aria-current="page"' : ""}>${icon(i)}<span>${label}</span></a>`).join("")}</nav><div class="sidebar-space"></div><div class="workspace-note">${icon("sparkles")}<h3>A little more headspace.</h3><p>Less noise. More room for what matters.</p></div><button class="workspace-create" data-action="workspace-create">${icon("plus")}Create workspace</button><div class="profile">${avatar(state.user.name, "dark")}<div><strong>${esc(state.user.name)}</strong><small>${esc(state.workspace?.role?.toLowerCase() || "Your account")}</small></div><button class="icon-button" data-action="logout" aria-label="Sign out" title="Sign out">${icon("logout")}</button></div></aside><div class="main-shell"><header class="topbar"><button class="mobile-menu" data-action="menu-toggle" aria-label="Open navigation" aria-expanded="false" aria-controls="workspace-navigation">${icon("menu")}</button><div class="breadcrumb"><span>${esc(state.workspace?.name || "Workspace")}</span>${icon("chevron")}<strong id="breadcrumb-page">${nav.find((x) => x[0] === state.page)?.[2] || "Overview"}</strong></div><div class="topbar-right"><form id="global-search-form" class="global-search"><label class="sr-only" for="global-search">Search all tasks</label>${icon("search")}<input id="global-search" placeholder="Search your tasks…" type="search" maxlength="200"><kbd>/</kbd></form>${writable() ? `<button class="primary" data-action="task-create">${icon("plus")}New task</button>` : ""}${avatar(state.user.name)}</div></header><main id="page-content" class="content" tabindex="-1">${loading()}</main></div></div>`;
+  app.innerHTML = `<div class="app-shell"><button class="mobile-overlay" data-action="menu-close" aria-label="Close navigation"></button><aside id="workspace-navigation" class="sidebar" aria-label="Workspace navigation"><div class="brand"><div class="orbit-mark" aria-hidden="true"></div>orbit<span>WORKSPACE</span></div><div class="workspace-picker"><div class="workspace-monogram">${esc(initials(state.workspace?.name || "O"))}</div><label class="sr-only" for="workspace-select">Switch workspace</label><select id="workspace-select">${state.workspaces.length ? state.workspaces.map((w) => `<option value="${esc(w.id)}"${w.id === state.workspace?.id ? " selected" : ""}>${esc(w.name)}</option>`).join("") : "<option>Your workspace</option>"}</select></div><p class="sidebar-label">YOUR SPACE</p><nav class="nav">${nav.map(([key, i, label]) => `<a href="#${key}" data-page="${key}" class="${state.page === key ? "active" : ""}"${state.page === key ? ' aria-current="page"' : ""}>${icon(i)}<span>${label}</span></a>`).join("")}</nav><div class="sidebar-space"></div><div class="workspace-note">${icon("sparkles")}<h3>A little more headspace.</h3><p>Less noise. More room for what matters.</p></div><button class="workspace-create" data-action="workspace-create">${icon("plus")}Create workspace</button><div class="profile">${avatar(state.user.name, "dark")}<div><strong>${esc(state.user.name)}</strong><small>${esc(state.workspace?.role?.toLowerCase() || "Your account")}</small></div><button class="icon-button" data-action="logout" aria-label="Sign out" title="Sign out">${icon("logout")}</button></div></aside><div class="main-shell"><header class="topbar"><button class="mobile-menu" data-action="menu-toggle" aria-label="Open navigation" aria-expanded="false" aria-controls="workspace-navigation">${icon("menu")}</button><div class="breadcrumb"><span>${esc(state.workspace?.name || "Workspace")}</span>${icon("chevron")}<strong id="breadcrumb-page">${nav.find((x) => x[0] === state.page)?.[2] || "Overview"}</strong></div><div class="topbar-right"><form id="global-search-form" class="global-search"><label class="sr-only" for="global-search">Search all tasks</label>${icon("search")}<input id="global-search" placeholder="Search your tasks…" type="search" maxlength="200"><kbd>/</kbd></form>${writable() ? `<button class="primary" data-action="task-create">${icon("plus")}New task</button>` : ""}<button id="notification-button" class="icon-button notification-trigger" data-action="view-notifications" aria-label="Inbox" title="Inbox">${icon("bell")}<span id="notification-count" class="notification-count" hidden></span></button>${avatar(state.user.name)}</div></header><main id="page-content" class="content" tabindex="-1">${loading()}</main></div></div>`;
   $("#global-search-form").addEventListener("submit", (event) => {
     event.preventDefault();
     state.filters.q = $("#global-search").value.trim();
@@ -341,11 +574,16 @@ function shell() {
       assigneeId: "",
     };
     state.tasks = null;
+    state.projects = [];
+    state.members = [];
     modal.close();
+    rememberWorkspace();
+    writeRoute();
     shell();
     await loadWorkspace();
   });
   syncDrawer();
+  updateUnreadBadge();
 }
 function syncDrawer() {
   const small = window.matchMedia("(max-width:700px)").matches;
@@ -367,7 +605,7 @@ async function loadWorkspace() {
       api(`${base()}/projects`),
       api(`${base()}/members`),
     ]);
-    if (state.workspace.id !== workspaceId) return;
+    if (state.workspace?.id !== workspaceId) return;
     state.projects = projects;
     state.members = members;
     await loadPage();
@@ -378,7 +616,7 @@ async function loadWorkspace() {
 function navigate(page) {
   if (!state.user) return;
   state.page = page;
-  location.hash = page;
+  writeRoute(page, null, false);
   modal.close();
   $(".app-shell")?.classList.remove("menu-open");
   syncDrawer();
@@ -394,13 +632,27 @@ function navigate(page) {
     tasks: "My workspace",
     team: "Team",
     activity: "Activity",
+    notifications: "Inbox",
+    settings: "Workspace settings",
+    account: "Your account",
   };
   $("#breadcrumb-page").textContent = names[page];
   document.title = `${names[page]} · Orbit`;
-  if (state.workspace) loadPage();
+  if (state.workspace || ["account", "notifications"].includes(page))
+    loadPage();
+  else
+    $("#page-content").innerHTML =
+      pageHeader(
+        "A fresh start.",
+        "Create a workspace to bring your team into focus.",
+      ) +
+      `<div class="panel">${empty("A home for your work", "Create your first workspace to manage its settings and team.", "workspace-create", "Create workspace", "folder")}</div>`;
+  $("#page-content")?.focus({ preventScroll: true });
 }
 function pageError(error) {
+  if (!$("#page-content")) return;
   if (error.status === 401) {
+    state.csrf = null;
     authView();
     toast("Your session ended. Sign in to continue.", true);
     return;
@@ -410,12 +662,41 @@ function pageError(error) {
     `<div class="inline-error" role="alert">${icon("alert")}<span>${esc(error.message)}</span><button data-action="reload">Try again</button></div>`;
 }
 async function loadPage(soft = false) {
-  if (!state.workspace) return;
+  if (!state.workspace && !["account", "notifications"].includes(state.page))
+    return;
   const id = ++state.request;
   const page = state.page;
-  const endpoint = base();
+  const endpoint = state.workspace ? base() : null;
   if (!soft) $("#page-content").innerHTML = loading();
   try {
+    if (page === "account") {
+      const [data, sessions] = await Promise.all([
+        api("/api/account"),
+        api("/api/account/sessions"),
+      ]);
+      if (id !== state.request) return;
+      state.account = data;
+      state.sessions = sessions;
+      state.user = { ...state.user, ...data };
+      renderAccount();
+    }
+    if (page === "settings") {
+      const settings = await api(`${endpoint}/settings`);
+      const invitations =
+        settings.role === "OWNER" ? await api(`${endpoint}/invitations`) : [];
+      if (id !== state.request) return;
+      state.workspaceSettings = settings;
+      state.invitations = invitations;
+      renderSettings();
+    }
+    if (page === "notifications") {
+      const data = await api("/api/notifications?page=0&size=30");
+      if (id !== state.request) return;
+      state.notifications = data;
+      state.unreadNotifications = data.unreadCount;
+      renderNotifications();
+      updateUnreadBadge();
+    }
     if (page === "overview") {
       const data = await api(`${endpoint}/overview`);
       if (id !== state.request) return;
@@ -710,6 +991,8 @@ function workspaceForm() {
         body: { name: new FormData(form).get("name").trim() },
       });
       state.workspace = workspace;
+      rememberWorkspace();
+      writeRoute();
       modal.close();
       toast("Your workspace is ready.");
       await loadWorkspaces();
@@ -796,7 +1079,8 @@ async function archiveProject(id) {
     toast(error.message, true);
   }
 }
-async function openTask(id) {
+async function openTask(id, updateLink = true) {
+  if (updateLink) writeRoute(state.page, id, false);
   openModal(
     `${modalHead("Finding your task…")}<div class="loading-state" role="status"><span class="spinner"></span>Loading the latest details</div>`,
   );
@@ -819,6 +1103,20 @@ async function openTask(id) {
     }
   }
 }
+async function copyTaskLink() {
+  if (!state.taskModal || !state.workspace) return;
+  const params = new URLSearchParams({
+    workspace: state.workspace.id,
+    task: state.taskModal.id,
+  });
+  const url = `${location.origin}${location.pathname}#tasks?${params}`;
+  try {
+    await navigator.clipboard.writeText(url);
+    toast("Task link copied.");
+  } catch {
+    toast("Copy the task link from your browser’s address bar.", true);
+  }
+}
 function taskForm(task = null, status = "TODO") {
   if (!task && !writable()) return;
   const t = task || {
@@ -837,7 +1135,7 @@ function taskForm(task = null, status = "TODO") {
   const canEdit = writable();
   const disabled = canEdit ? "" : " disabled";
   openModal(
-    `${modalHead(task ? "The details that move work forward." : "A clear next step.", task ? "TASK DETAILS" : "NEW TASK")}<form id="task-form"><div class="modal-body">${!canEdit ? '<div class="readonly-note">You have view access to this workspace.</div>' : ""}${!task && !state.projects.some((p) => p.status === "ACTIVE") ? '<div class="readonly-note">Create an active project before adding a task.</div>' : ""}<div class="form-grid"><div class="field full"><label for="task-title">Task name</label><input id="task-title" name="title" required maxlength="200" value="${esc(t.title)}" placeholder="What needs to happen?"${disabled}></div><div class="field full"><label for="task-description">Description</label><textarea id="task-description" name="description" maxlength="10000" placeholder="Add the context your team needs…"${disabled}>${esc(t.description)}</textarea></div><div class="field full"><label for="task-project">Project</label><select id="task-project" name="projectId" required${disabled}>${projectOptions(t.projectId)}</select></div><div class="field"><label for="task-status">Status</label><select id="task-status" name="status"${disabled}>${options(STATUS, t.status)}</select></div><div class="field"><label for="task-priority">Priority</label><select id="task-priority" name="priority"${disabled}>${options(PRIORITY, t.priority)}</select></div><div class="field"><label for="task-assignee">Assignee</label><select id="task-assignee" name="assigneeId"${disabled}>${memberOptions(t.assigneeId)}</select></div><div class="field"><label for="task-due">Due date</label><input id="task-due" name="dueDate" type="date" value="${esc(t.dueDate || "")}"${disabled}></div><p class="form-message" data-form-error role="alert" tabindex="-1" hidden></p></div></div><div class="modal-footer">${task && canEdit ? `<button class="danger-button" type="button" data-action="task-delete" data-id="${esc(task.id)}">${icon("trash")}Delete</button>` : ""}<button class="secondary" type="button" data-action="modal-close">${canEdit ? "Cancel" : "Close"}</button>${canEdit ? `<button class="primary" type="submit">${task ? "Save changes" : "Create task"} ${icon("arrow")}</button>` : ""}</div></form>${task ? `<section class="modal-body comment-section"><h3>Conversation <span id="comment-total"></span></h3><div id="comments"><div class="loading-state" role="status"><span class="spinner"></span>Loading conversation</div></div>${canEdit ? `<form id="comment-form" class="comment-form"><label class="sr-only" for="comment-body">Add a comment</label><textarea id="comment-body" name="body" required maxlength="4000" placeholder="Add an update, a question, or a little context…"></textarea><button class="primary" type="submit">${icon("comment")}Comment</button></form><p id="comment-error" class="form-message" role="alert" hidden></p>` : ""}</section>` : ""}`,
+    `${modalHead(task ? "The details that move work forward." : "A clear next step.", task ? "TASK DETAILS" : "NEW TASK")}<form id="task-form"><div class="modal-body">${!canEdit ? '<div class="readonly-note">You have view access to this workspace.</div>' : ""}${!task && !state.projects.some((p) => p.status === "ACTIVE") ? '<div class="readonly-note">Create an active project before adding a task.</div>' : ""}<div class="form-grid"><div class="field full"><label for="task-title">Task name</label><input id="task-title" name="title" required maxlength="200" value="${esc(t.title)}" placeholder="What needs to happen?"${disabled}></div><div class="field full"><label for="task-description">Description</label><textarea id="task-description" name="description" maxlength="10000" placeholder="Add the context your team needs…"${disabled}>${esc(t.description)}</textarea></div><div class="field full"><label for="task-project">Project</label><select id="task-project" name="projectId" required${disabled}>${projectOptions(t.projectId)}</select></div><div class="field"><label for="task-status">Status</label><select id="task-status" name="status"${disabled}>${options(STATUS, t.status)}</select></div><div class="field"><label for="task-priority">Priority</label><select id="task-priority" name="priority"${disabled}>${options(PRIORITY, t.priority)}</select></div><div class="field"><label for="task-assignee">Assignee</label><select id="task-assignee" name="assigneeId"${disabled}>${memberOptions(t.assigneeId)}</select></div><div class="field"><label for="task-due">Due date</label><input id="task-due" name="dueDate" type="date" value="${esc(t.dueDate || "")}"${disabled}></div><p class="form-message" data-form-error role="alert" tabindex="-1" hidden></p></div></div><div class="modal-footer">${task && canEdit ? `<button class="danger-button" type="button" data-action="task-delete" data-id="${esc(task.id)}">${icon("trash")}Delete</button>` : ""}${task ? `<button class="secondary" type="button" data-action="task-copy-link">${icon("link")}Copy link</button>` : ""}<button class="secondary" type="button" data-action="modal-close">${canEdit ? "Cancel" : "Close"}</button>${canEdit ? `<button class="primary" type="submit">${task ? "Save changes" : "Create task"} ${icon("arrow")}</button>` : ""}</div></form>${task ? `<section class="modal-body comment-section"><h3>Conversation <span id="comment-total"></span></h3><div id="comments"><div class="loading-state" role="status"><span class="spinner"></span>Loading conversation</div></div>${canEdit ? `<form id="comment-form" class="comment-form"><label class="sr-only" for="comment-body">Add a comment</label><textarea id="comment-body" name="body" required maxlength="4000" placeholder="Add an update, a question, or a little context…"></textarea><button class="primary" type="submit">${icon("comment")}Comment</button></form><p id="comment-error" class="form-message" role="alert" hidden></p>` : ""}</section>` : ""}`,
   );
   $("#task-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1056,17 +1354,364 @@ async function removeMember(id) {
     toast(error.message, true);
   }
 }
+function renderAccount() {
+  const a = state.account;
+  $("#page-content").innerHTML =
+    pageHeader(
+      "Your space. Your details.",
+      "Keep your account up to date and your access secure.",
+      "",
+      "YOUR ACCOUNT",
+    ) +
+    `<div class="settings-grid"><section class="panel settings-card"><div class="settings-heading">${icon("people")}<div><h2>A familiar face.</h2><p>Choose the name your teammates see.</p></div></div><form id="profile-form" class="settings-form"><div class="field"><label for="profile-name">Display name</label><input id="profile-name" name="name" required maxlength="100" value="${esc(a.name)}" autocomplete="name"></div><div class="field"><span class="field-label">Email address</span><p class="account-email">${icon("mail")}<span>${esc(a.email)}</span></p><small>Your account email stays with this identity.</small></div><p class="form-message" data-form-error role="alert" tabindex="-1" hidden></p><button class="primary" type="submit">Save profile ${icon("check")}</button></form></section><section class="panel settings-card"><div class="settings-heading">${icon("shield")}<div><h2>A little account protection.</h2><p>${a.emailVerified ? "Your email address is confirmed." : "Verify your email to protect access to your account."}</p></div></div><div class="verification-state ${a.emailVerified ? "verified" : ""}">${icon(a.emailVerified ? "checkCircle" : "mail")}<span>${a.emailVerified ? "Email verified" : "Email not verified"}</span></div>${!a.emailVerified ? (state.mailEnabled ? '<button class="secondary" data-action="account-verify">Send verification email</button><p id="verification-status" class="small muted" role="status"></p>' : '<p class="small muted">Account emails are currently unavailable. Ask an administrator to enable email delivery.</p>') : ""}<p class="security-note">Your password is protected. Changing it signs you out on every device.</p></section><section class="panel settings-card full-card"><div class="settings-heading">${icon("shield")}<div><h2>A stronger next chapter.</h2><p>Update your password and keep your account yours.</p></div></div><form id="password-form" class="settings-form"><div class="form-grid"><div class="field full"><label for="current-password">Current password</label><input id="current-password" name="currentPassword" type="password" required maxlength="72" autocomplete="current-password"></div><div class="field"><label for="new-password">New password</label><input id="new-password" name="newPassword" type="password" required minlength="12" maxlength="72" autocomplete="new-password"><small>Use 12–72 characters. A memorable phrase works well.</small></div><div class="field"><label for="confirm-password">Confirm new password</label><input id="confirm-password" name="confirmation" type="password" required minlength="12" maxlength="72" autocomplete="new-password"></div><p class="form-message" data-form-error role="alert" tabindex="-1" hidden></p></div><button class="primary" type="submit">Update password ${icon("shield")}</button></form></section></div>`;
+  $("#profile-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    setBusy(form, true);
+    $("[data-form-error]", form).hidden = true;
+    try {
+      state.account = await api("/api/account", {
+        method: "PATCH",
+        body: { name: new FormData(form).get("name").trim() },
+      });
+      state.user = { ...state.user, ...state.account };
+      shell();
+      if (state.workspace) await loadWorkspace();
+      else await loadPage();
+      toast("Your profile is up to date.");
+    } catch (error) {
+      formError(error, form);
+      if (form.isConnected) setBusy(form, false);
+    }
+  });
+  $("#password-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = Object.fromEntries(new FormData(form));
+    setBusy(form, true);
+    $("[data-form-error]", form).hidden = true;
+    try {
+      validatePassword(values.newPassword);
+      if (values.newPassword !== values.confirmation)
+        throw new Error("The new passwords need to match.");
+      await api("/api/account/password", {
+        method: "POST",
+        body: {
+          currentPassword: values.currentPassword,
+          newPassword: values.newPassword,
+        },
+      });
+      await signedOut(
+        "Your password is updated. Sign in again with the new one.",
+      );
+    } catch (error) {
+      formError(error, form);
+      if (form.isConnected) setBusy(form, false);
+    }
+  });
+  $(".settings-grid").insertAdjacentHTML(
+    "beforeend",
+    `<section class="panel settings-card full-card"><div class="settings-heading">${icon("shield")}<div><h2>Keep your access in view.</h2><p>Recent active sessions. End any session that no longer needs access.</p></div></div><div class="session-list" role="list">${state.sessions.map((s) => `<div class="session-row" role="listitem" data-current="${Boolean(s.current)}"><div class="session-symbol">${icon("shield")}</div><div class="session-copy"><h3>${s.current ? "Current session" : "Signed-in session"}${s.current ? '<span class="role-pill">This browser</span>' : ""}</h3><p>Last active ${esc(formatTime(s.lastAccessedAt))}</p><small>Started ${esc(formatTime(s.createdAt))} · Expires ${esc(formatTime(s.expiresAt))}</small></div><button class="secondary" data-action="session-revoke" data-id="${esc(s.id)}">End session</button></div>`).join("")}</div>${state.sessions.length === 100 ? '<p class="small muted">Showing up to 100 recent active sessions.</p>' : ""}</section>`,
+  );
+}
+async function revokeSession(id) {
+  const session = state.sessions.find((s) => s.id === id);
+  if (!session) return;
+  if (
+    !(await confirmAction(
+      "End this session?",
+      session.current
+        ? "This signs you out of the current browser. You can sign in again at any time."
+        : "This session will need to sign in again before accessing your account.",
+      "End session",
+    ))
+  )
+    return;
+  try {
+    await api(`/api/account/sessions/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+    if (session.current) await signedOut("This session has ended.");
+    else {
+      await loadPage();
+      toast("Session ended.");
+    }
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+async function requestAccountVerification(button) {
+  button.disabled = true;
+  try {
+    const result = await api("/api/account/verification", { method: "POST" });
+    $("#verification-status").textContent =
+      `${result.message} Check your inbox; another link can be sent after a minute.`;
+    toast("Check your inbox for your verification link.");
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    if (button.isConnected) button.disabled = false;
+  }
+}
+function renderSettings() {
+  const settings = state.workspaceSettings;
+  const canManage = settings.role === "OWNER";
+  state.workspace = {
+    ...state.workspace,
+    name: settings.name,
+    role: settings.role,
+  };
+  const pending = state.invitations.filter((i) => i.status === "PENDING");
+  $("#page-content").innerHTML =
+    pageHeader(
+      "A space that fits your team.",
+      "A little care for the workspace you’re building together.",
+      "",
+      "WORKSPACE SETTINGS",
+    ) +
+    `<div class="settings-grid"><section class="panel settings-card"><div class="settings-heading">${icon("folder")}<div><h2>Your shared space.</h2><p>${canManage ? "Give your workspace a name that feels like home." : "Workspace owners manage the shared name and invitations."}</p></div></div><form id="settings-form" class="settings-form"><div class="field"><label for="settings-name">Workspace name</label><input id="settings-name" name="name" required maxlength="100" value="${esc(settings.name)}"${canManage ? "" : " disabled"}></div><p class="small muted">Created ${esc(formatDate(settings.createdAt))} · ${esc(settings.role.toLowerCase())} access</p><p class="form-message" data-form-error role="alert" tabindex="-1" hidden></p>${canManage ? `<button class="primary" type="submit">Save workspace ${icon("check")}</button>` : ""}</form></section><section class="panel settings-card"><div class="settings-heading">${icon("people")}<div><h2>Make room for your people.</h2><p>${canManage ? "Invite a teammate by email. They can join after signing in or creating an account." : "Your workspace owners can invite new teammates."}</p></div></div>${canManage && state.mailEnabled ? `<form id="invitation-form" class="settings-form"><div class="field"><label for="invitation-email">Teammate email</label><input id="invitation-email" name="email" type="email" required maxlength="254" autocomplete="email" placeholder="teammate@yourteam.com"></div><div class="field"><label for="invitation-role">Workspace access</label><select id="invitation-role" name="role">${options({ MEMBER: "Member — can edit work", VIEWER: "Viewer — can read work" }, "MEMBER")}</select></div><p class="form-message" data-form-error role="alert" tabindex="-1" hidden></p><button class="primary" type="submit">Send invitation ${icon("mail")}</button></form>` : canManage ? '<p class="small muted">Invitations need email delivery. Ask an administrator to enable it. You can directly add an existing registered account from Team.</p><button class="secondary" data-action="view-team">Manage team</button>' : '<button class="secondary" data-action="view-team">View team</button>'}</section>${canManage ? `<section class="panel settings-card full-card"><div class="section-header"><h2>Invitations <span>${pending.length} pending</span></h2></div>${state.invitations.length ? `<div class="table-scroll"><table class="data-table invitation-table"><thead><tr><th scope="col">Email</th><th scope="col">Access</th><th scope="col">Status</th><th scope="col">Expires</th><th scope="col">Manage</th></tr></thead><tbody>${state.invitations.map((i) => `<tr><td>${esc(i.email)}</td><td>${esc(i.role.toLowerCase())}</td><td><span class="role-pill">${esc(i.status.toLowerCase())}</span></td><td>${esc(formatDate(i.expiresAt))}</td><td>${i.status === "PENDING" ? `<button class="icon-button" data-action="invitation-revoke" data-id="${esc(i.id)}" aria-label="Revoke invitation for ${esc(i.email)}">${icon("close")}</button>` : "—"}</td></tr>`).join("")}</tbody></table></div>` : '<p class="small muted">Invitations appear here when you invite someone into the picture.</p>'}</section>` : ""}</div>`;
+  $("#settings-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!canManage) return;
+    const form = event.currentTarget;
+    setBusy(form, true);
+    $("[data-form-error]", form).hidden = true;
+    try {
+      state.workspaceSettings = await api(`${base()}/settings`, {
+        method: "PATCH",
+        body: {
+          name: new FormData(form).get("name").trim(),
+          version: settings.version,
+        },
+      });
+      state.workspace = { ...state.workspace, ...state.workspaceSettings };
+      state.workspaces = state.workspaces.map((w) =>
+        w.id === state.workspace.id ? { ...w, name: state.workspace.name } : w,
+      );
+      shell();
+      await loadPage();
+      toast("Your workspace has a fresh name.");
+    } catch (error) {
+      formError(
+        error.status === 409
+          ? new Error(
+              "This workspace changed while you were editing. Refresh its settings before saving again.",
+            )
+          : error,
+        form,
+      );
+      if (form.isConnected) setBusy(form, false);
+    }
+  });
+  $("#invitation-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    setBusy(form, true);
+    $("[data-form-error]", form).hidden = true;
+    try {
+      await api(`${base()}/invitations`, {
+        method: "POST",
+        body: Object.fromEntries(new FormData(form)),
+      });
+      toast("Invitation queued for email delivery.");
+      await loadPage();
+    } catch (error) {
+      formError(error, form);
+      if (form.isConnected) setBusy(form, false);
+    }
+  });
+}
+async function revokeInvitation(id) {
+  const invitation = state.invitations.find((i) => i.id === id);
+  if (
+    !invitation ||
+    !(await confirmAction(
+      "Revoke this invitation?",
+      `The invitation for ${invitation.email} will no longer work.`,
+      "Revoke invitation",
+      true,
+    ))
+  )
+    return;
+  try {
+    await api(`${base()}/invitations/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+    toast("Invitation revoked.");
+    await loadPage();
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+function updateUnreadBadge() {
+  const badge = $("#notification-count");
+  if (!badge) return;
+  badge.textContent =
+    state.unreadNotifications > 99 ? "99+" : String(state.unreadNotifications);
+  badge.hidden = state.unreadNotifications === 0;
+  $("#notification-button")?.setAttribute(
+    "aria-label",
+    state.unreadNotifications
+      ? `Inbox, ${state.unreadNotifications} unread notifications`
+      : "Inbox",
+  );
+}
+async function refreshUnread() {
+  if (!state.user) return;
+  try {
+    const data = await api("/api/notifications?page=0&size=1");
+    if (!state.user) return;
+    state.unreadNotifications = data.unreadCount;
+    updateUnreadBadge();
+  } catch {
+    /* The inbox itself reports request errors when opened. */
+  }
+}
+function renderNotifications() {
+  const data = state.notifications;
+  $("#page-content").innerHTML =
+    pageHeader(
+      "The updates that matter.",
+      "Assignments, conversations, and workspace access, in one thoughtful inbox.",
+      data.unreadCount
+        ? `<button class="secondary" data-action="notifications-read-all">${icon("checkCircle")}Mark all as read</button>`
+        : "",
+      "YOUR INBOX",
+    ) +
+    `<div class="results-note"><span>${data.unreadCount} unread · ${data.total} total updates</span><button data-action="notifications-refresh">Refresh inbox</button></div><div class="panel notification-list">${data.items.length ? data.items.map((n) => `<article class="notification-row ${n.read ? "" : "unread"}"><div class="notification-symbol">${icon(n.type === "TASK_ASSIGNED" || n.type === "ASSIGNED" ? "tasks" : "comment")}</div><div class="notification-copy"><button class="notification-title" data-action="notification-open" data-id="${esc(n.id)}">${esc(n.title)}</button><p>${esc(n.body)}</p><div class="notification-meta"><span>${esc(n.workspaceName)}</span><time datetime="${esc(n.createdAt)}">${esc(formatTime(n.createdAt))}</time>${!n.read ? '<span class="unread-label">Unread</span>' : ""}</div></div>${!n.read ? `<button class="icon-button" data-action="notification-read" data-id="${esc(n.id)}" aria-label="Mark ${esc(n.title)} as read">${icon("check")}</button>` : ""}</article>`).join("") : empty("A little peace and quiet.", "Assignments, conversation updates, and changes to workspace access will appear here.", "", "", "bell")}</div>${data.items.length < data.total ? `<div class="load-more"><button class="secondary" data-action="notifications-more">Load older notifications ${icon("arrow")}</button><span>${data.items.length} of ${data.total}</span></div>` : ""}`;
+}
+async function readNotification(id, rerender = true) {
+  const item = state.notifications?.items.find((n) => n.id === id);
+  if (!item || item.read) return;
+  await api(`/api/notifications/${encodeURIComponent(id)}/read`, {
+    method: "PATCH",
+  });
+  item.read = true;
+  state.notifications.unreadCount = Math.max(
+    0,
+    state.notifications.unreadCount - 1,
+  );
+  state.unreadNotifications = state.notifications.unreadCount;
+  if (rerender && state.page === "notifications") renderNotifications();
+  updateUnreadBadge();
+}
+async function openNotification(id) {
+  const item = state.notifications?.items.find((n) => n.id === id);
+  if (!item) return;
+  try {
+    await readNotification(id, false);
+    state.workspaces = await api("/api/workspaces");
+    const workspace = state.workspaces.find((w) => w.id === item.workspaceId);
+    if (!workspace)
+      throw new Error("You no longer have access to this workspace.");
+    state.workspace = workspace;
+    state.filters = {
+      q: "",
+      status: "",
+      priority: "",
+      projectId: "",
+      assigneeId: "",
+    };
+    state.page = item.taskId ? "tasks" : "overview";
+    rememberWorkspace();
+    writeRoute(state.page, item.taskId);
+    shell();
+    await loadWorkspace();
+    if (item.taskId) await openTask(item.taskId, false);
+  } catch (error) {
+    toast(error.message, true);
+    if (state.page === "notifications") renderNotifications();
+  }
+}
+async function loadMoreNotifications(button) {
+  button.disabled = true;
+  const current = state.notifications;
+  try {
+    const data = await api(
+      `/api/notifications?page=${current.page + 1}&size=${current.size}`,
+    );
+    if (state.page !== "notifications") return;
+    state.notifications = { ...data, items: [...current.items, ...data.items] };
+    state.unreadNotifications = data.unreadCount;
+    renderNotifications();
+    updateUnreadBadge();
+  } catch (error) {
+    toast(error.message, true);
+    if (button.isConnected) button.disabled = false;
+  }
+}
+async function invitationScreen(token) {
+  modal.close();
+  if (!token) {
+    app.innerHTML = authLayout(
+      '<div class="eyebrow">A small interruption</div><h2>This invitation is incomplete.</h2><p>Ask the workspace owner for a new invitation.</p><button class="primary" data-action="auth-continue">Continue to Orbit</button>',
+    );
+    return;
+  }
+  app.innerHTML = authLayout(
+    '<div class="eyebrow">A place for you</div><h2>Finding your invitation…</h2><div class="loading-state" role="status"><span class="spinner"></span>Checking the latest details</div>',
+  );
+  try {
+    const preview = await api(
+      `/api/invitations/preview?token=${encodeURIComponent(token)}`,
+    );
+    state.pendingInvite = { token, preview };
+    const matches =
+      state.user &&
+      state.user.email.toLowerCase() === preview.email.toLowerCase();
+    app.innerHTML = authLayout(
+      `<div class="eyebrow">Great work starts together</div><h2>You’re invited to ${esc(preview.workspaceName)}.</h2><p>A workspace invitation for ${esc(preview.email)}.</p><div class="invitation-summary"><span class="role-pill">${esc(preview.role.toLowerCase())} access</span><span class="small muted">Expires ${esc(formatDate(preview.expiresAt))}</span></div>${matches ? '<form id="accept-invitation-form" class="auth-form"><div class="auth-error" data-form-error role="alert" tabindex="-1" hidden></div><button class="primary" type="submit">Join workspace ' + icon("arrow") + "</button></form>" : state.user ? `<div class="auth-error">You’re signed in as ${esc(state.user.email)}. Use the invited account to accept.</div><button class="primary auth-wide" data-action="invitation-sign-out">Sign out and switch account ${icon("logout")}</button>` : `<div class="auth-form"><button class="primary" data-action="auth-login">Sign in to accept ${icon("arrow")}</button>${state.registrationEnabled ? '<button class="secondary" data-action="auth-register">Create an account</button>' : ""}</div>`}<button class="text-button" data-action="invitation-dismiss">Maybe later</button>`,
+    );
+    $("#accept-invitation-form")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      setBusy(form, true);
+      try {
+        const workspace = await api("/api/invitations/accept", {
+          method: "POST",
+          body: { token },
+        });
+        state.workspace = workspace;
+        state.pendingInvite = null;
+        clearTokenRoute();
+        rememberWorkspace();
+        await loadWorkspaces();
+        toast(`Welcome to ${workspace.name}.`);
+      } catch (error) {
+        formError(error, form);
+        if (form.isConnected) setBusy(form, false);
+      }
+    });
+  } catch (error) {
+    app.innerHTML = authLayout(
+      `<div class="eyebrow">A small interruption</div><h2>This invitation needs another try.</h2><p>${esc(error.message)}</p><p>Ask the workspace owner for a fresh invitation.</p><button class="primary" data-action="invitation-dismiss">Continue to Orbit ${icon("arrow")}</button>`,
+    );
+  }
+}
+async function signedOut(message, preserveRoute = false) {
+  state.request++;
+  state.user = null;
+  state.account = null;
+  state.workspace = null;
+  state.workspaces = [];
+  state.csrf = null;
+  state.notifications = null;
+  state.unreadNotifications = 0;
+  if (!preserveRoute) {
+    state.pendingInvite = null;
+    clearTokenRoute();
+  }
+  await csrf();
+  if (preserveRoute && (await specialRoute())) return;
+  authView();
+  document.title = "Orbit · Work in focus";
+  if (message) toast(message);
+}
+
 async function logout() {
   try {
     await api("/api/auth/logout", { method: "POST" });
-    state.csrf = null;
-    state.user = null;
-    await csrf();
-    state.workspaces = [];
-    authView();
-    location.hash = "";
-    document.title = "Orbit · Work in focus";
-    toast("You’re signed out. See you soon.");
+    await signedOut("You’re signed out. See you soon.");
   } catch (error) {
     toast(error.message, true);
   }
@@ -1078,6 +1723,55 @@ document.addEventListener("click", async (event) => {
   const id = target.dataset.id;
   if (action === "auth-login") authView("login");
   if (action === "auth-register") authView("register");
+  if (action === "forgot-password")
+    recoveryForm("forgot-password", $("#auth-email")?.value || "");
+  if (action === "resend-verification")
+    recoveryForm(
+      "resend-verification",
+      target.dataset.email || $("#auth-email")?.value || "",
+    );
+  if (action === "auth-continue") {
+    clearTokenRoute();
+    if (state.user) loadWorkspaces();
+    else authView();
+  }
+  if (action === "invitation-dismiss") {
+    state.pendingInvite = null;
+    clearTokenRoute();
+    if (state.user) loadWorkspaces();
+    else authView();
+  }
+  if (action === "invitation-sign-out") {
+    try {
+      await api("/api/auth/logout", { method: "POST" });
+      await signedOut("", true);
+    } catch (error) {
+      toast(error.message, true);
+    }
+  }
+  if (action === "account-verify") requestAccountVerification(target);
+  if (action === "session-revoke") revokeSession(id);
+  if (action === "invitation-revoke") revokeInvitation(id);
+  if (action === "notification-open") openNotification(id);
+  if (action === "notification-read") {
+    try {
+      await readNotification(id);
+    } catch (error) {
+      toast(error.message, true);
+    }
+  }
+  if (action === "notifications-read-all") {
+    target.disabled = true;
+    try {
+      await api("/api/notifications/read-all", { method: "POST" });
+      await loadPage();
+    } catch (error) {
+      toast(error.message, true);
+      if (target.isConnected) target.disabled = false;
+    }
+  }
+  if (action === "notifications-more") loadMoreNotifications(target);
+  if (action === "notifications-refresh") loadPage();
   if (action === "demo") demoLogin();
   if (action === "logout") logout();
   if (action === "modal-close") {
@@ -1100,6 +1794,7 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "task-create") taskForm(null, target.dataset.status || "TODO");
   if (action === "task-open") openTask(id);
+  if (action === "task-copy-link") copyTaskLink();
   if (action === "task-delete") deleteTask(id);
   if (action === "task-complete") changeTaskStatus(id, null, target);
   if (action === "task-board") {
@@ -1124,7 +1819,10 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "member-add") memberForm();
   if (action === "member-remove") removeMember(id);
-  if (action === "reload") loadWorkspace();
+  if (action === "reload") {
+    if (state.workspace) loadWorkspace();
+    else loadPage();
+  }
   if (action.startsWith("view-")) navigate(action.slice(5));
   if (action === "menu-toggle")
     setMenu(!$(".app-shell").classList.contains("menu-open"));
@@ -1181,6 +1879,7 @@ document.addEventListener("keydown", (event) => {
 window.matchMedia("(max-width:700px)").addEventListener("change", syncDrawer);
 modal.addEventListener("close", () => {
   state.taskModal = null;
+  if (state.user && route().task) writeRoute(state.page);
 });
 modal.addEventListener("click", (event) => {
   if (event.target !== modal) return;
@@ -1193,25 +1892,48 @@ modal.addEventListener("click", (event) => {
   )
     modal.close();
 });
-window.addEventListener("hashchange", () => {
-  const page = location.hash.slice(1);
-  if (
-    state.user &&
-    ["overview", "projects", "tasks", "team", "activity"].includes(page) &&
-    page !== state.page
-  )
-    navigate(page);
+window.addEventListener("hashchange", async () => {
+  if (await specialRoute()) return;
+  const current = route();
+  if (!state.user || !PAGES.includes(current.page)) return;
+  if (current.workspace && current.workspace !== state.workspace?.id) {
+    state.workspace =
+      state.workspaces.find((w) => w.id === current.workspace) ||
+      state.workspace;
+    rememberWorkspace();
+    state.page = current.page;
+    state.filters = {
+      q: "",
+      status: "",
+      priority: "",
+      projectId: "",
+      assigneeId: "",
+    };
+    shell();
+    if (state.workspace) await loadWorkspace();
+  } else if (current.page !== state.page) {
+    state.page = current.page;
+    shell();
+    await loadPage();
+  }
+  if (current.task && current.task !== state.taskModal?.id)
+    await openTask(current.task, false);
+  else if (!current.task && state.taskModal) modal.close();
 });
 async function boot() {
   try {
     await csrf();
     const config = await api("/api/auth/config");
     state.demo = Boolean(config.demoEnabled);
+    state.registrationEnabled = config.registrationEnabled !== false;
+    state.emailVerificationRequired = Boolean(config.emailVerificationRequired);
+    state.mailEnabled = Boolean(config.mailEnabled);
     try {
       state.user = await api("/api/auth/me");
     } catch (error) {
       if (error.status !== 401) throw error;
     }
+    if (await specialRoute()) return;
     if (state.user) await loadWorkspaces();
     else authView();
   } catch (error) {

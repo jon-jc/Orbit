@@ -17,15 +17,32 @@ Providing `ORBIT_BASE_URL` disables automatic server startup entirely, including
 
 The desktop test depends on the original demo fixture: the Northstar Studio workspace, Website relaunch project, and Jordan Lee account. Use a fresh, disposable local database if those records have been renamed or removed. Do not point this suite at a production database.
 
-The two tests verify:
+Four product tests always run:
 
-- Desktop demo sign-in; task creation with project, assignee, priority, and date; search; status changes; comments displayed as literal text; persistence after browser reload; and permanent task deletion confirmed through the API.
+- Desktop demo sign-in; task creation with project, assignee, priority, and date; search; status changes; comments displayed as literal text; restoration of an open task from its URL after reload; and permanent task deletion confirmed through the API.
 - Mobile account registration; workspace and project creation; drawer state and inaccessible offscreen navigation; absence of page overflow at 390 × 844; project persistence after reload; and sign-out followed by another sign-in.
+- Profile and owner workspace renaming; selection of the remembered workspace when the URL contains no workspace; revocation of another session and the current session; password changes invalidating every session; old-password rejection; and successful sign-in with the new password.
+- Assignment, comment, and membership notifications for a separate account; individual and bulk read controls; links opening the correct task and workspace; persistence of that open task after reload; and mobile navigation without page overflow.
 
-Both tests also reject uncaught browser JavaScript exceptions. They are Chromium smoke checks; they do not provide exhaustive accessibility, cross-browser, load, or security coverage. Server-side authorization and data rules have separate Java tests.
+Two email tests run when `ORBIT_MAILPIT_URL` is set:
 
-Each run uses unique record names. The desktop test attempts task cleanup in a `finally` block, including after assertion failures; cleanup requires the server and authenticated session to remain available. Its audit events remain in the demo workspace. On success, the mobile test archives its project. The new account and workspace remain because the API has no deletion endpoint for them; a failed mobile test can also leave its project active. The default local profile uses the persistent `data/orbit` database, so use a disposable checkout or explicitly configure a temporary database for repeated tests.
+- Registration email captured through actual SMTP delivery; verification through the emailed link; the confirmed account state; forgot-password delivery; password reset through its emailed link; old-password rejection; new-password sign-in; and receipt of the password-change security notice.
+- Owner invitation delivery; opening its emailed link in a fresh browser context; registering the invited address; verifying that account through its captured verification email; returning to the pending invitation; accepting viewer access; and the owner's invitation history recording acceptance.
+
+All executed tests reject uncaught browser JavaScript exceptions. They are Chromium smoke checks; they do not provide exhaustive accessibility, cross-browser, load, or security coverage. Server-side authorization, required-verification enforcement, token expiry, cooldowns, and data rules have separate Java tests. The browser suite expects the local profile's registration-enabled, verification-optional configuration so that its non-email tests work without an SMTP service.
+
+To include email coverage, start the loopback-only sink with `docker compose -f compose.dev.yaml up -d`, configure Orbit's real SMTP delivery as described in [ACCOUNT_SECURITY.md](../docs/ACCOUNT_SECURITY.md#local-mailpit-without-external-delivery), and set `ORBIT_MAILPIT_URL=http://127.0.0.1:8025` for the test process. Set `ORBIT_PUBLIC_BASE_URL` to the Orbit address being tested. For an existing server on port 8082, a PowerShell invocation is:
+
+```powershell
+$env:ORBIT_BASE_URL = 'http://127.0.0.1:8082'
+$env:ORBIT_MAILPIT_URL = 'http://127.0.0.1:8025'
+npm run test:e2e
+```
+
+With automatic startup, set the SMTP and encryption-key environment variables before `npm run test:e2e`; Playwright's Java process inherits them. When `ORBIT_MAILPIT_URL` is absent, only the two email tests are explicitly skipped. When it is present, email tests fail if Orbit reports mail disabled or if real messages fail to reach the sink. They select messages by unique recipient and subject, validate the email link's public origin, and use a separate API client for Mailpit so Orbit session cookies are not sent to the sink. CI configures the sink and executes all six tests.
+
+Each run uses unique record names. The desktop and notification tests attempt task cleanup in `finally` blocks, including after assertion failures; cleanup requires the server and authenticated session to remain available. Audit events remain. On success, the mobile project test archives its project. Accounts, workspaces, memberships, notifications, and the notification fixture's project remain because the API has no account or workspace deletion endpoint. Failed tests can leave their fixtures active. Email tests attempt to delete only captured messages addressed to their unique recipients; they never submit a Mailpit delete request with an empty message-ID list. The default local profile uses the persistent `data/orbit` database, so use a disposable checkout or explicitly configure a temporary database for repeated tests.
 
 Use `npm run test:e2e:headed` for visible debugging and `npm run format:check` to check frontend and test source formatting.
 
-Failures retain screenshots and traces under `test-results/`. Inspect a trace with `npx playwright show-trace <trace.zip>`.
+Failures retain screenshots and traces under `test-results/`. Inspect a trace with `npx playwright show-trace <trace.zip>`. Traces can contain test session data and email-token URLs; keep them within the test environment. The runner does not print captured email bodies or tokens in assertions.

@@ -29,6 +29,8 @@ Task statuses are `BACKLOG`, `TODO`, `IN_PROGRESS`, `IN_REVIEW`, and `DONE`; pri
 5. An owner can add someone in **Team** using their already registered email. MEMBER can collaborate; VIEWER can read. Membership is immediate; no invitation email is sent.
 6. Review **Activity** or export tasks. Switch workspaces to see each team's independent resources.
 
+Account settings support profile updates, verification, password changes/recovery, and individual session revocation. Owners can rename workspace settings and send/revoke seven-day email invitations for members/viewers. The account notification inbox records assignments, comments, and access changes, with individual/all read controls and saved workspace/task links. Email flows require configured SMTP; local Mailpit captures test delivery.
+
 ## Requirements and quickstart
 
 | Purpose | Requirements |
@@ -231,7 +233,7 @@ RFC ProblemDetail-style errors include `status`, `title`, `detail`, and `request
 
 ## Verification and developer tools
 
-**41 backend test executions passed**: 25 H2/security/account/email tests plus 16 shared workflows repeated against PostgreSQL 17. **Two Chromium scenarios passed** for desktop and mobile. These counts are executed checks, not a penetration test or throughput claim.
+**55 backend test executions passed**: 32 H2/security/account/email tests plus 23 account, collaboration, and workflow checks against PostgreSQL 17. **Six Chromium scenarios passed** for desktop and mobile. These counts are executed checks, not a penetration test or throughput claim.
 
 | Checks | Coverage |
 | --- | --- |
@@ -287,7 +289,7 @@ BCrypt cost 12 protects passwords; registration allows 12–72 characters and at
 
 Registration is open. Rate limits are per instance/IP, proxies can collapse addresses, and replicas do not share counters. Public traffic needs a gateway-wide abuse/signup policy. Activity is an application trail, not a tamper-proof compliance archive.
 
-There is no SSO/MFA, account/workspace deletion, billing, attachments, realtime sync, invitation email, or external notifications. Workspace selection resets on browser reload and individual tasks do not have deep links. Task deletion is permanent. Exports are synchronous and large workspaces require measurement. No SLA, formal penetration-test result, or automatic disaster-recovery guarantee is claimed.
+There is no SSO/MFA, account/workspace deletion, billing, attachments, or live push. Notifications refresh on demand. Workspace/task links restore context and recheck access. Task deletion is permanent. Exports are synchronous and large workspaces require measurement. No SLA, formal penetration-test result, or automatic disaster-recovery guarantee is claimed.
 
 Account APIs support profile updates, email verification, password recovery, and active-session controls. SMTP delivery uses an encrypted transactional outbox with bounded retries. See [Account security and email](docs/ACCOUNT_SECURITY.md) for setup, migration behavior, and exact endpoints.
 

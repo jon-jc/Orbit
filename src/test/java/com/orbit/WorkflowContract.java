@@ -76,6 +76,10 @@ abstract class WorkflowContract {
         String project = project(anon, workspace);
         call(anon, "POST", base(workspace) + "/tasks", taskJson("Task", project, "INVALID", "HIGH", null, null, null), 400);
         call(anon, "POST", base(workspace) + "/tasks", taskJson("Task", project, "TODO", "HIGH", null, "2026-02-30", null), 400);
+        call(anon, "POST", base(workspace) + "/tasks", taskJson("Task", project, "TODO", "HIGH", null, "+10000-01-01", null), 400);
+        call(anon, "POST", base(workspace) + "/tasks",
+                taskJson("RejectedNul", project, "TODO", "HIGH", null, null, null)
+                        .replace("RejectedNul", "Rejected\\u0000Nul"), 400);
         call(anon, "GET", base(workspace) + "/tasks?page=-1", null, 400);
         call(anon, "GET", base(workspace) + "/tasks?size=101", null, 400);
         call(anon, "GET", base(workspace) + "/tasks?status=INVALID", null, 400);
@@ -165,7 +169,7 @@ abstract class WorkflowContract {
         MvcResult first = task(owner, w, "Launch 100%", p, "IN_PROGRESS", "URGENT", owner.id, tomorrow);
         String t = string(first, "$.id");
         task(owner, w, "Completed design", p, "DONE", "LOW", null, yesterday);
-        task(owner, w, "Overdue review", p, "TODO", "HIGH", null, yesterday);
+        task(owner, w, "Overdue_review!", p, "TODO", "HIGH", null, yesterday);
         call(owner, "POST", base(w) + "/tasks/" + t + "/comments", json("body", "Reviewed <script>alert(1)</script> & ready."), 201);
         MvcResult comments = call(owner, "GET", base(w) + "/tasks/" + t + "/comments", null, 200);
         assertThat(string(comments, "$[0].body")).isEqualTo("Reviewed <script>alert(1)</script> & ready.");
@@ -185,6 +189,11 @@ abstract class WorkflowContract {
         MvcResult literal = mvc.perform(request(HttpMethod.GET, base(w) + "/tasks")
                 .cookie(owner.cookieArray()).param("q", "%")).andExpect(status().isOk()).andReturn();
         assertThat(number(literal, "$.total")).isEqualTo(1);
+        for (String escapedCharacter : List.of("_", "!")) {
+            MvcResult escaped = mvc.perform(request(HttpMethod.GET, base(w) + "/tasks")
+                    .cookie(owner.cookieArray()).param("q", escapedCharacter)).andExpect(status().isOk()).andReturn();
+            assertThat(number(escaped, "$.total")).isEqualTo(1);
+        }
         MvcResult caseInsensitive = mvc.perform(request(HttpMethod.GET, base(w) + "/tasks")
                 .cookie(owner.cookieArray()).param("q", "lAUnCh")).andExpect(status().isOk()).andReturn();
         assertThat(number(caseInsensitive, "$.total")).isEqualTo(1);
@@ -195,7 +204,7 @@ abstract class WorkflowContract {
         assertThat(list(page0, "$.items[*].id")).hasSize(2).doesNotContainAnyElementsOf(list(page1, "$.items[*].id"));
         assertThat(list(page1, "$.items[*].id")).hasSize(1);
         MvcResult activity = call(owner, "GET", base(w) + "/activity?page=0&size=100", null, 200);
-        assertThat(list(activity, "$.items[*].entityName")).contains("Launch 100%", "Completed design", "Overdue review");
+        assertThat(list(activity, "$.items[*].entityName")).contains("Launch 100%", "Completed design", "Overdue_review!");
         assertThat(list(activity, "$.items[*].actorName")).containsOnly("Workflow Owner");
         assertThat(number(activity, "$.total")).isGreaterThanOrEqualTo(5);
     }

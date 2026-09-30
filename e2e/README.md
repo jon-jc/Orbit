@@ -21,7 +21,7 @@ Four product tests always run:
 
 - Desktop demo sign-in; task creation with project, assignee, priority, and date; search; status changes; comments displayed as literal text; restoration of an open task from its URL after reload; and permanent task deletion confirmed through the API.
 - Mobile account registration; workspace and project creation; drawer state and inaccessible offscreen navigation; absence of page overflow at 390 × 844; project persistence after reload; and sign-out followed by another sign-in.
-- Profile and owner workspace renaming; selection of the remembered workspace when the URL contains no workspace; revocation of another session and the current session; password changes invalidating every session; old-password rejection; and successful sign-in with the new password.
+- Profile and owner workspace renaming; workspace creation and switching with deliberately held API responses, including rejection of stale settings and metadata failures; selection of the remembered workspace when the URL contains no workspace; revocation of another session and the current session; password changes invalidating every session; old-password rejection; and successful sign-in with the new password.
 - Assignment, comment, and membership notifications for a separate account; individual and bulk read controls; links opening the correct task and workspace; persistence of that open task after reload; and mobile navigation without page overflow.
 
 Two email tests run when `ORBIT_MAILPIT_URL` is set:
@@ -30,6 +30,8 @@ Two email tests run when `ORBIT_MAILPIT_URL` is set:
 - Owner invitation delivery; opening its emailed link in a fresh browser context; registering the invited address; verifying that account through its captured verification email; returning to the pending invitation; accepting viewer access; and the owner's invitation history recording acceptance.
 
 All executed tests reject uncaught browser JavaScript exceptions. They are Chromium smoke checks; they do not provide exhaustive accessibility, cross-browser, load, or security coverage. Server-side authorization, required-verification enforcement, token expiry, cooldowns, and data rules have separate Java tests. The browser suite expects the local profile's registration-enabled, verification-optional configuration so that its non-email tests work without an SMTP service.
+
+The CI browser step uses `SPRING_APPLICATION_JSON` to set `orbit.auth.rate-limit-enabled=false` only for its disposable browser-test application. Its repeated account and session flows share the runner's loopback address and would otherwise compete for one abuse-limit bucket. The product's limiter remains enabled by default, and dedicated Java tests continue to verify its enforcement. An existing server keeps its own configuration when `ORBIT_BASE_URL` is supplied.
 
 To include email coverage, start the loopback-only sink with `docker compose -f compose.dev.yaml up -d`, configure Orbit's real SMTP delivery as described in [ACCOUNT_SECURITY.md](../docs/ACCOUNT_SECURITY.md#local-mailpit-without-external-delivery), and set `ORBIT_MAILPIT_URL=http://127.0.0.1:8025` for the test process. Set `ORBIT_PUBLIC_BASE_URL` to the Orbit address being tested. For an existing server on port 8082, a PowerShell invocation is:
 

@@ -235,6 +235,46 @@ async function apiLogin(request, email, password) {
   expect(response.status()).toBe(200);
 }
 
+async function holdApiResponse(page, pattern, method = "GET", override) {
+  let arrived, release, delivered;
+  const arrivedPromise = new Promise((resolve) => {
+    arrived = resolve;
+  });
+  const releasedPromise = new Promise((resolve) => {
+    release = resolve;
+  });
+  const deliveredPromise = new Promise((resolve) => {
+    delivered = resolve;
+  });
+  const handler = async (route) => {
+    if (route.request().method() !== method) return route.continue();
+    const response = await route.fetch();
+    arrived();
+    await releasedPromise;
+    await route.fulfill(override || { response });
+    delivered();
+  };
+  await page.route(pattern, handler);
+  return {
+    arrived: arrivedPromise,
+    delivered: deliveredPromise,
+    release,
+    close: async () => {
+      release();
+      await page.unroute(pattern, handler);
+    },
+  };
+}
+
+async function flushBrowserFrames(page) {
+  await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      }),
+  );
+}
+
 test("account and workspace settings persist, individual sessions end, and password changes revoke every session", async ({
   page,
   browser,
@@ -274,18 +314,87 @@ test("account and workspace settings persist, individual sessions end, and passw
       .getByRole("combobox", { name: "Switch workspace", exact: true })
       .locator("option:checked"),
   ).toHaveText(renamed);
-  await page
-    .getByRole("button", { name: "Create workspace", exact: true })
-    .click();
-  await dialog(page)
-    .getByLabel("Workspace name", { exact: true })
-    .fill(`Second ${suffix}`);
-  await dialog(page)
-    .getByRole("button", { name: "Create workspace", exact: true })
-    .click();
-  await page
-    .getByRole("combobox", { name: "Switch workspace", exact: true })
-    .selectOption({ label: renamed });
+  const secondName = `Second ${suffix}`;
+  const creation = await holdApiResponse(page, "**/api/workspaces", "POST");
+  try {
+    await page
+      .getByRole("button", { name: "Create workspace", exact: true })
+      .click();
+    await dialog(page)
+      .getByLabel("Workspace name", { exact: true })
+      .fill(secondName);
+    await dialog(page)
+      .getByRole("button", { name: "Create workspace", exact: true })
+      .click();
+    await creation.arrived;
+    await expect(dialog(page)).toBeVisible();
+    creation.release();
+    await expect(dialog(page)).not.toBeVisible();
+    await expect(
+      page
+        .getByRole("combobox", { name: "Switch workspace", exact: true })
+        .locator("option:checked"),
+    ).toHaveText(secondName);
+    await expect(page.locator("#settings-name")).toHaveValue(secondName);
+  } finally {
+    await creation.close();
+  }
+  const firstWorkspace = await workspaceByName(page.request, renamed);
+  const secondWorkspace = await workspaceByName(page.request, secondName);
+  const oldSettings = await holdApiResponse(
+    page,
+    `**/api/workspaces/${secondWorkspace.id}/settings`,
+  );
+  const newMetadata = await holdApiResponse(
+    page,
+    `**/api/workspaces/${firstWorkspace.id}/projects`,
+  );
+  try {
+    await page
+      .getByRole("link", { name: "Workspace settings", exact: true })
+      .click();
+    await oldSettings.arrived;
+    await page
+      .getByRole("combobox", { name: "Switch workspace", exact: true })
+      .selectOption({ label: renamed });
+    await newMetadata.arrived;
+    oldSettings.release();
+    await oldSettings.delivered;
+    await flushBrowserFrames(page);
+    await expect(page.locator("#settings-form")).toHaveCount(0);
+    newMetadata.release();
+    await expect(page.locator("#settings-name")).toHaveValue(renamed);
+  } finally {
+    await oldSettings.close();
+    await newMetadata.close();
+  }
+  const failedMetadata = await holdApiResponse(
+    page,
+    `**/api/workspaces/${secondWorkspace.id}/projects`,
+    "GET",
+    {
+      status: 503,
+      contentType: "application/problem+json",
+      body: JSON.stringify({ detail: "A delayed metadata request failed." }),
+    },
+  );
+  try {
+    await page
+      .getByRole("combobox", { name: "Switch workspace", exact: true })
+      .selectOption({ label: secondName });
+    await failedMetadata.arrived;
+    await page
+      .getByRole("combobox", { name: "Switch workspace", exact: true })
+      .selectOption({ label: renamed });
+    await expect(page.locator("#settings-name")).toHaveValue(renamed);
+    failedMetadata.release();
+    await failedMetadata.delivered;
+    await flushBrowserFrames(page);
+    await expect(page.locator("#settings-name")).toHaveValue(renamed);
+    await expect(page.locator(".inline-error")).toHaveCount(0);
+  } finally {
+    await failedMetadata.close();
+  }
   await expect(
     page
       .locator("#settings-form")

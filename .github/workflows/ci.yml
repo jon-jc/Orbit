@@ -55,6 +55,7 @@ jobs:
       - name: Browser workflow and mobile tests
         run: npm run test:e2e
         env:
+          SPRING_APPLICATION_JSON: '{"orbit":{"auth":{"rate-limit-enabled":false}}}'
           ORBIT_MAIL_ENABLED: 'true'
           ORBIT_MAIL_HOST: 127.0.0.1
           ORBIT_MAIL_PORT: '1025'

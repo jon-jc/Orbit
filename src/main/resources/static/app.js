@@ -548,6 +548,7 @@ async function loadWorkspaces() {
   refreshUnread();
 }
 function shell() {
+  ++state.request;
   const nav = [
     ["overview", "grid", "Overview"],
     ["projects", "layers", "Projects"],
@@ -600,17 +601,20 @@ function setMenu(open) {
 }
 async function loadWorkspace() {
   const workspaceId = state.workspace.id;
+  const userId = state.user?.id;
   try {
     const [projects, members] = await Promise.all([
       api(`${base()}/projects`),
       api(`${base()}/members`),
     ]);
-    if (state.workspace?.id !== workspaceId) return;
+    if (state.workspace?.id !== workspaceId || state.user?.id !== userId)
+      return;
     state.projects = projects;
     state.members = members;
     await loadPage();
   } catch (error) {
-    pageError(error);
+    if (state.workspace?.id === workspaceId && state.user?.id === userId)
+      pageError(error);
   }
 }
 function navigate(page) {
@@ -682,6 +686,7 @@ async function loadPage(soft = false) {
     }
     if (page === "settings") {
       const settings = await api(`${endpoint}/settings`);
+      if (id !== state.request) return;
       const invitations =
         settings.role === "OWNER" ? await api(`${endpoint}/invitations`) : [];
       if (id !== state.request) return;
@@ -991,11 +996,23 @@ function workspaceForm() {
         body: { name: new FormData(form).get("name").trim() },
       });
       state.workspace = workspace;
+      state.workspaces = [...state.workspaces, workspace];
+      state.filters = {
+        q: "",
+        status: "",
+        priority: "",
+        projectId: "",
+        assigneeId: "",
+      };
+      state.tasks = null;
+      state.projects = [];
+      state.members = [];
       rememberWorkspace();
       writeRoute();
+      shell();
       modal.close();
       toast("Your workspace is ready.");
-      await loadWorkspaces();
+      await loadWorkspace();
     } catch (error) {
       formError(error, form);
       setBusy(form, false);

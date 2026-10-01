@@ -8,6 +8,7 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -111,6 +112,7 @@ public class DomainService {
         Member before = member(workspace, user);
         if (before.role() == Role.OWNER) throw conflict("Demote another owner before removing them.");
         jdbc.update("UPDATE task SET assignee_id=NULL,version=version+1,updated_at=? WHERE workspace_id=? AND assignee_id=?", now(), workspace, user);
+        jdbc.update("UPDATE saved_task_view SET assignee_id=NULL,version=version+1,updated_at=? WHERE workspace_id=? AND assignee_id=?", now(), workspace, user);
         jdbc.update("DELETE FROM workspace_member WHERE workspace_id=? AND user_id=?", workspace, user);
         audit(workspace, actor, "removed", "member", before.name());
     }
@@ -149,8 +151,7 @@ public class DomainService {
         requireMember(workspace, actor);
         validatePage(page, size);
         if (q != null && q.length() > 200) throw badRequest("Search must be at most 200 characters.");
-        if (projectId != null && !projectId.isBlank()) project(workspace, projectId);
-        if (assigneeId != null && !assigneeId.isBlank()) member(workspace, assigneeId);
+        validateFilterReferences(workspace, projectId, assigneeId);
         List<Object> args = new ArrayList<>();
         args.add(workspace);
         StringBuilder where = new StringBuilder(" WHERE t.workspace_id=?");
@@ -208,6 +209,48 @@ public class DomainService {
         if (!java.util.Objects.equals(before.assigneeId(), input.assigneeId()))
             notifications.assigned(workspace, id, actor, input.assigneeId(), input.title().strip());
         return taskIn(workspace, id);
+    }
+
+    @Transactional
+    public List<Task> bulkTasks(String workspace, String actor, ProductivityModels.BulkTasks input) {
+        lockWorkspace(workspace, actor);
+        requireWriter(workspace, actor);
+        if (input.taskIds() == null || input.taskIds().isEmpty() || input.taskIds().size() > 100)
+            throw badRequest("Select between 1 and 100 tasks.");
+        var ids = new HashSet<>(input.taskIds());
+        if (ids.size() != input.taskIds().size()) throw badRequest("Each task may appear only once in a batch.");
+        if (input.versions() == null || !input.versions().keySet().equals(ids)
+                || input.versions().values().stream().anyMatch(version -> version == null || version < 0))
+            throw badRequest("Supply the current nonnegative version for every selected task, with no extra entries.");
+        boolean clear = Boolean.TRUE.equals(input.clearAssignee());
+        if (clear && input.assigneeId() != null) throw badRequest("Choose an assignee or clear assignments, not both.");
+        if (input.status() == null && input.priority() == null && input.assigneeId() == null && !clear)
+            throw badRequest("Choose at least one task change.");
+        if (input.assigneeId() != null) member(workspace, input.assigneeId());
+
+        // Validate the entire scope and every version before any task, event, or notification write.
+        List<Task> before = input.taskIds().stream().map(id -> taskIn(workspace, id)).toList();
+        for (Task task : before) {
+            if (task.version() != input.versions().get(task.id()))
+                throw conflict("A selected task has changed. Refresh the selection before applying the batch.");
+        }
+        OffsetDateTime changedAt = now();
+        List<Task> updated = new ArrayList<>();
+        for (Task task : before) {
+            TaskStatus status = input.status() == null ? task.status() : input.status();
+            Priority priority = input.priority() == null ? task.priority() : input.priority();
+            String assignee = clear ? null : input.assigneeId() == null ? task.assigneeId() : input.assigneeId();
+            int changed = jdbc.update("""
+                    UPDATE task SET status=?,priority=?,assignee_id=?,updated_at=?,version=version+1
+                    WHERE workspace_id=? AND id=? AND version=?
+                    """, status.name(), priority.name(), assignee, changedAt, workspace, task.id(), task.version());
+            if (changed != 1) throw conflict("A selected task has changed. Refresh the selection before applying the batch.");
+            audit(workspace, actor, status != task.status() ? "moved in bulk to " + readable(status.name()) : "updated in bulk", "task", task.title());
+            if (!java.util.Objects.equals(task.assigneeId(), assignee))
+                notifications.assigned(workspace, task.id(), actor, assignee, task.title());
+            updated.add(taskIn(workspace, task.id()));
+        }
+        return updated;
     }
 
     @Transactional
@@ -308,7 +351,7 @@ public class DomainService {
         return rows.get(0);
     }
 
-    private Role requireMember(String workspace, String actor) {
+    Role requireMember(String workspace, String actor) {
         List<String> roles = jdbc.query("SELECT role FROM workspace_member WHERE workspace_id=? AND user_id=?", (r,n) -> r.getString(1), workspace, actor);
         if (roles.isEmpty()) throw notFound("Workspace not found.");
         return Role.valueOf(roles.get(0));
@@ -323,7 +366,7 @@ public class DomainService {
     }
 
     /** Locks serialize membership changes with writes that reference membership, preventing authorization races. */
-    private void lockWorkspace(String workspace, String actor) {
+    void lockWorkspace(String workspace, String actor) {
         requireMember(workspace, actor);
         List<String> rows = jdbc.query("SELECT id FROM workspace WHERE id=? FOR UPDATE", (r,n) -> r.getString(1), workspace);
         if (rows.isEmpty()) throw notFound("Workspace not found.");
@@ -333,6 +376,11 @@ public class DomainService {
     private void validateReferences(String workspace, String project, String assignee) {
         project(workspace, project);
         if (assignee != null) member(workspace, assignee);
+    }
+
+    void validateFilterReferences(String workspace, String projectId, String assigneeId) {
+        if (projectId != null && !projectId.isBlank()) project(workspace, projectId);
+        if (assigneeId != null && !assigneeId.isBlank()) member(workspace, assigneeId);
     }
 
     private long ownerCount(String workspace) { return count("SELECT COUNT(*) FROM workspace_member WHERE workspace_id=? AND role='OWNER'", workspace); }

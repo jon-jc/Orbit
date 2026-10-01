@@ -31,6 +31,21 @@ abstract class WorkflowContract {
     @Autowired MockMvc mvc;
 
     @Test
+    void invalidHttpNegotiationReturnsClientErrorsAndPreservesProtocolHeaders() throws Exception {
+        Client client = anonymous();
+        MvcResult unsupported = mvc.perform(request(HttpMethod.POST, "/api/auth/login")
+                .cookie(client.cookieArray()).header(client.header, client.token)
+                .contentType(MediaType.TEXT_PLAIN).content("{}"))
+                .andExpect(status().isUnsupportedMediaType()).andReturn();
+        assertThat(number(unsupported,"$.status")).isEqualTo(415);
+        assertThat(string(unsupported,"$.requestId")).isEqualTo(unsupported.getResponse().getHeader("X-Request-ID"));
+        MvcResult wrongMethod = call(client,"PUT","/api/auth/config","{}",405);
+        assertThat(wrongMethod.getResponse().getHeader("Allow")).contains("GET");
+        mvc.perform(request(HttpMethod.GET,"/api/auth/config").accept(MediaType.IMAGE_PNG))
+                .andExpect(status().isNotAcceptable());
+    }
+
+    @Test
     void authenticationRequiresCsrfRotatesTheSessionAndLogoutRevokesIt() throws Exception {
         Client client = anonymous();
         MvcResult unauthorized=call(client, "GET", "/api/auth/me", null, 401);

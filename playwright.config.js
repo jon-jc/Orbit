@@ -13,8 +13,7 @@ export default defineConfig({
   webServer: process.env.ORBIT_BASE_URL
     ? undefined
     : {
-        command:
-          "java -jar target/orbit-1.0.0.jar --spring.profiles.active=local --server.address=127.0.0.1",
+        command: "node e2e/start-server.js",
         url: "http://127.0.0.1:8080",
         timeout: 120_000,
         reuseExistingServer: !process.env.CI,

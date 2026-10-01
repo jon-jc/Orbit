@@ -1,7 +1,10 @@
+import { createCommandPalette } from "./commands.js";
+
 const $ = (selector, scope = document) => scope.querySelector(selector);
 const app = $("#app");
 const modal = $("#modal");
 const confirmModal = $("#confirm-modal");
+const commandDialog = $("#command-dialog");
 const STATUS = {
   BACKLOG: "Backlog",
   TODO: "To do",
@@ -68,6 +71,7 @@ const paths = {
   bell: '<path d="M5 17h14l-2-3V9a5 5 0 0 0-10 0v5l-2 3Zm5 4h4"/>',
   mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
   link: '<path d="m9 15 6-6M8 9l-3 3a4 4 0 0 0 6 6l3-3m-4-6 3-3a4 4 0 0 1 6 6l-3 3"/>',
+  filter: '<path d="M3 4h18l-7 8v7l-4 2v-9L3 4Z"/>',
 };
 const icon = (name) =>
   `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.layers}</svg>`;
@@ -115,7 +119,55 @@ const state = {
   mailEnabled: false,
   pendingInvite: null,
   sessions: [],
+  selectedTasks: new Map(),
+  bulkChanges: { status: "", priority: "", assignee: "" },
+  bulkBusy: false,
+  bulkError: "",
+  savedViews: [],
+  savedViewsWorkspace: null,
+  activeSavedView: null,
+  taskLoading: false,
+  selectionGeneration: 0,
+  singleKeyShortcuts: (() => {
+    try {
+      return localStorage.getItem("orbit.single-key-shortcuts") !== "disabled";
+    } catch {
+      return true;
+    }
+  })(),
 };
+const FILTER_KEYS = ["q", "status", "priority", "projectId", "assigneeId"];
+const blankFilters = () =>
+  Object.fromEntries(FILTER_KEYS.map((key) => [key, ""]));
+const context = () => ({
+  user: state.user?.id,
+  workspace: state.workspace?.id,
+});
+const sameContext = (captured) =>
+  Boolean(
+    captured.user &&
+    state.user?.id === captured.user &&
+    state.workspace?.id === captured.workspace,
+  );
+const endpointFor = (workspace) =>
+  `/api/workspaces/${encodeURIComponent(workspace)}`;
+function clearSelection() {
+  state.selectionGeneration++;
+  state.selectedTasks.clear();
+  state.bulkChanges = { status: "", priority: "", assignee: "" };
+  state.bulkError = "";
+  state.bulkBusy = false;
+}
+function resetWorkspaceState() {
+  clearSelection();
+  state.savedViews = [];
+  state.savedViewsWorkspace = null;
+  state.activeSavedView = null;
+  state.tasks = null;
+  state.projects = [];
+  state.members = [];
+  state.taskLoading = false;
+}
 const PAGES = [
   "overview",
   "projects",
@@ -156,7 +208,25 @@ function route() {
     workspace: params.get("workspace"),
     task: params.get("task"),
     token: params.get("token"),
+    filters: Object.fromEntries(
+      FILTER_KEYS.map((key) => [
+        key,
+        (params.get(key) || "").slice(0, key === "q" ? 200 : 100),
+      ]),
+    ),
+    layout: params.get("layout") === "list" ? "list" : "board",
   };
+}
+function restoreFilters(current) {
+  state.filters =
+    current.page === "tasks"
+      ? { ...blankFilters(), ...current.filters }
+      : blankFilters();
+  if (!STATUS[state.filters.status]) state.filters.status = "";
+  if (!PRIORITY[state.filters.priority]) state.filters.priority = "";
+  state.taskView = current.layout || "board";
+  state.activeSavedView = null;
+  clearSelection();
 }
 function rememberedWorkspace() {
   try {
@@ -180,6 +250,12 @@ function writeRoute(page = state.page, task = null, replace = true) {
   const params = new URLSearchParams();
   if (state.workspace) params.set("workspace", state.workspace.id);
   if (task) params.set("task", task);
+  if (page === "tasks") {
+    Object.entries(state.filters).forEach(([key, value]) => {
+      if (value) params.set(key, value);
+    });
+    if (state.taskView === "list") params.set("layout", "list");
+  }
   const hash = `#${page}${params.size ? `?${params}` : ""}`;
   const url = `${location.pathname}${hash}`;
   if (replace) history.replaceState(null, "", url);
@@ -258,14 +334,21 @@ class ApiError extends Error {
   }
 }
 async function csrf() {
+  const userId = state.user?.id;
   const result = await api("/api/auth/csrf");
-  state.csrf = result;
+  if (state.user?.id === userId) state.csrf = result;
 }
 async function api(url, { method = "GET", body, signal } = {}) {
+  const userId = state.user?.id;
   const headers = { Accept: "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (!["GET", "HEAD"].includes(method)) {
     if (!state.csrf) await csrf();
+    if (state.user?.id !== userId || !state.csrf)
+      throw new DOMException(
+        "This account changed before the request was sent.",
+        "AbortError",
+      );
     headers[state.csrf.headerName || "X-CSRF-TOKEN"] = state.csrf.token;
   }
   let response;
@@ -521,7 +604,10 @@ async function demoLogin() {
   }
 }
 async function loadWorkspaces() {
-  state.workspaces = await api("/api/workspaces");
+  const userId = state.user?.id;
+  const workspaces = await api("/api/workspaces");
+  if (!userId || userId !== state.user?.id) return;
+  state.workspaces = workspaces;
   if (state.pendingInvite && route().page !== "invite") {
     const params = new URLSearchParams({ token: state.pendingInvite.token });
     history.replaceState(null, "", `${location.pathname}#invite?${params}`);
@@ -533,12 +619,27 @@ async function loadWorkspaces() {
   state.workspace =
     state.workspaces.find((w) => w.id === oldId) || state.workspaces[0] || null;
   state.page = PAGES.includes(current.page) ? current.page : "overview";
+  restoreFilters(current);
+  if (
+    current.workspace &&
+    !state.workspaces.some((w) => w.id === current.workspace)
+  ) {
+    state.workspace = null;
+    shell();
+    pageError({
+      message:
+        "This workspace isn’t available to your account. Choose a workspace from the menu.",
+    });
+    return;
+  }
   rememberWorkspace();
   writeRoute(state.page, current.task);
   shell();
   if (state.workspace) {
+    const captured = context();
     await loadWorkspace();
-    if (current.task) await openTask(current.task, false);
+    if (current.task && sameContext(captured) && route().task === current.task)
+      await openTask(current.task, false);
   } else if (["account", "notifications"].includes(state.page))
     await loadPage();
   else
@@ -549,6 +650,7 @@ async function loadWorkspaces() {
 }
 function shell() {
   ++state.request;
+  commands.close();
   const nav = [
     ["overview", "grid", "Overview"],
     ["projects", "layers", "Projects"],
@@ -567,22 +669,23 @@ function shell() {
   });
   $("#workspace-select").addEventListener("change", async (event) => {
     state.workspace = state.workspaces.find((w) => w.id === event.target.value);
-    state.filters = {
-      q: "",
-      status: "",
-      priority: "",
-      projectId: "",
-      assigneeId: "",
-    };
-    state.tasks = null;
-    state.projects = [];
-    state.members = [];
+    state.filters = blankFilters();
+    resetWorkspaceState();
     modal.close();
     rememberWorkspace();
     writeRoute();
     shell();
     await loadWorkspace();
   });
+  $(".topbar-right").insertAdjacentHTML(
+    "afterbegin",
+    `<button class="command-trigger" data-action="commands-open" aria-label="Open commands and task search">${icon("search")}<span>Find your next move</span><kbd>⌘ / Ctrl K</kbd></button>`,
+  );
+  $("#global-search-form").remove();
+  $(".workspace-create").insertAdjacentHTML(
+    "beforebegin",
+    `<button class="sidebar-shortcuts" data-action="shortcuts">${icon("info")}Keyboard shortcuts <kbd>?</kbd></button>`,
+  );
   syncDrawer();
   updateUnreadBadge();
 }
@@ -603,22 +706,29 @@ async function loadWorkspace() {
   const workspaceId = state.workspace.id;
   const userId = state.user?.id;
   try {
-    const [projects, members] = await Promise.all([
+    const [projects, members, savedViews] = await Promise.all([
       api(`${base()}/projects`),
       api(`${base()}/members`),
+      api(`${base()}/saved-views`),
     ]);
     if (state.workspace?.id !== workspaceId || state.user?.id !== userId)
       return;
     state.projects = projects;
     state.members = members;
+    state.savedViews = savedViews;
+    state.savedViewsWorkspace = workspaceId;
     await loadPage();
   } catch (error) {
     if (state.workspace?.id === workspaceId && state.user?.id === userId)
       pageError(error);
   }
 }
-function navigate(page) {
+async function navigate(page) {
   if (!state.user) return;
+  const captured = context();
+  commands.close();
+  clearTimeout(searchTimer);
+  if (page !== "tasks") clearSelection();
   state.page = page;
   writeRoute(page, null, false);
   modal.close();
@@ -643,7 +753,7 @@ function navigate(page) {
   $("#breadcrumb-page").textContent = names[page];
   document.title = `${names[page]} · Orbit`;
   if (state.workspace || ["account", "notifications"].includes(page))
-    loadPage();
+    await loadPage();
   else
     $("#page-content").innerHTML =
       pageHeader(
@@ -651,14 +761,13 @@ function navigate(page) {
         "Create a workspace to bring your team into focus.",
       ) +
       `<div class="panel">${empty("A home for your work", "Create your first workspace to manage its settings and team.", "workspace-create", "Create workspace", "folder")}</div>`;
-  $("#page-content")?.focus({ preventScroll: true });
+  if (sameContext(captured) && state.page === page)
+    $("#page-content")?.focus({ preventScroll: true });
 }
 function pageError(error) {
   if (!$("#page-content")) return;
   if (error.status === 401) {
-    state.csrf = null;
-    authView();
-    toast("Your session ended. Sign in to continue.", true);
+    signedOut("Your session ended. Sign in to continue.");
     return;
   }
   $("#page-content").innerHTML =
@@ -671,6 +780,8 @@ async function loadPage(soft = false) {
   const id = ++state.request;
   const page = state.page;
   const endpoint = state.workspace ? base() : null;
+  $("#page-content")?.setAttribute("aria-busy", "true");
+  if (page === "tasks") pendingTaskFilters();
   if (!soft) $("#page-content").innerHTML = loading();
   try {
     if (page === "account") {
@@ -722,6 +833,7 @@ async function loadPage(soft = false) {
       const data = await api(`${endpoint}/tasks?${params}`);
       if (id !== state.request) return;
       state.tasks = data;
+      state.taskLoading = false;
       renderTasks();
     }
     if (page === "team") {
@@ -737,7 +849,13 @@ async function loadPage(soft = false) {
       renderActivity();
     }
   } catch (error) {
-    if (id === state.request) pageError(error);
+    if (id === state.request) {
+      state.taskLoading = false;
+      pageError(error);
+    }
+  } finally {
+    if (id === state.request)
+      $("#page-content")?.setAttribute("aria-busy", "false");
   }
 }
 function projectCard(p, compact = false) {
@@ -849,10 +967,15 @@ function renderProjects() {
     `<div class="section-header"><h2>Active projects <span>${active.length}</span></h2></div>${active.length ? `<div class="project-grid">${active.map((p) => projectCard(p)).join("")}</div>` : `<div class="panel">${empty("Your next idea belongs here", "Create a project and turn a big idea into a few clear next steps.", writable() ? "project-create" : "", "Create project")}</div>`}${archived.length ? `<section class="dashboard-tasks"><div class="section-header"><h2>Archived <span>${archived.length}</span></h2></div><div class="project-grid">${archived.map((p) => projectCard(p)).join("")}</div></section>` : ""}`;
 }
 function taskCard(task) {
-  return `<article class="task-card"><div class="task-card-head"><span class="project-tag" title="${esc(task.projectName)}">${esc(task.projectName)}</span>${priorityPill(task.priority)}</div><button class="task-card-title" data-action="task-open" data-id="${esc(task.id)}">${esc(task.title)}</button>${task.description ? `<p class="task-card-desc">${esc(task.description)}</p>` : ""}<div class="task-card-footer">${duePill(task)}${task.commentCount ? `<span class="comment-count">${icon("comment")}${task.commentCount}</span>` : ""}${task.assigneeName ? avatar(task.assigneeName, "small-avatar") : '<span class="muted small">Unassigned</span>'}</div>${writable() ? `<label class="sr-only" for="status-${esc(task.id)}">Status of ${esc(task.title)}</label><select class="quick-status" id="status-${esc(task.id)}" data-task-status="${esc(task.id)}">${options(STATUS, task.status)}</select>` : ""}</article>`;
+  return `<article class="task-card${state.selectedTasks.has(task.id) ? " selected" : ""}"><div class="task-card-head">${taskSelection(task)}<span class="project-tag" title="${esc(task.projectName)}">${esc(task.projectName)}</span>${priorityPill(task.priority)}</div><button class="task-card-title" data-action="task-open" data-id="${esc(task.id)}">${esc(task.title)}</button>${task.description ? `<p class="task-card-desc">${esc(task.description)}</p>` : ""}<div class="task-card-footer">${duePill(task)}${task.commentCount ? `<span class="comment-count">${icon("comment")}${task.commentCount}</span>` : ""}${task.assigneeName ? avatar(task.assigneeName, "small-avatar") : '<span class="muted small">Unassigned</span>'}</div>${writable() ? `<label class="sr-only" for="status-${esc(task.id)}">Status of ${esc(task.title)}</label><select class="quick-status" id="status-${esc(task.id)}" data-task-status="${esc(task.id)}">${options(STATUS, task.status)}</select>` : ""}</article>`;
+}
+function taskSelection(task) {
+  return writable()
+    ? `<label class="task-selection"><input id="select-${esc(task.id)}" type="checkbox" data-task-select="${esc(task.id)}" aria-label="Select ${esc(task.title)}"${state.selectedTasks.has(task.id) ? " checked" : ""}${state.bulkBusy ? " disabled" : ""}></label>`
+    : "";
 }
 function taskTable(items) {
-  return `<div class="panel table-scroll"><table class="data-table"><thead><tr><th scope="col">Task</th><th scope="col">Status</th><th scope="col">Priority</th><th scope="col">Assignee</th><th scope="col">Due date</th></tr></thead><tbody>${items.map((t) => `<tr><td><button class="task-name" data-action="task-open" data-id="${esc(t.id)}">${esc(t.title)}</button><span class="task-project">${esc(t.projectName)}</span></td><td><span class="status-label"><span class="status-dot ${statusClass(t.status)}"></span>${esc(STATUS[t.status])}</span></td><td>${priorityPill(t.priority)}</td><td><div class="member-cell">${t.assigneeName ? `${avatar(t.assigneeName, "small-avatar")}${esc(t.assigneeName)}` : '<span class="muted small">Unassigned</span>'}</div></td><td>${duePill(t) || '<span class="muted small">—</span>'}</td></tr>`).join("")}</tbody></table></div>`;
+  return `<div class="panel table-scroll"><table class="data-table"><thead><tr>${writable() ? '<th scope="col" class="selection-cell"><span class="sr-only">Select tasks</span></th>' : ""}<th scope="col">Task</th><th scope="col">Status</th><th scope="col">Priority</th><th scope="col">Assignee</th><th scope="col">Due date</th></tr></thead><tbody>${items.map((t) => `<tr class="${state.selectedTasks.has(t.id) ? "selected" : ""}">${writable() ? `<td class="selection-cell">${taskSelection(t)}</td>` : ""}<td><button class="task-name" data-action="task-open" data-id="${esc(t.id)}">${esc(t.title)}</button><span class="task-project">${esc(t.projectName)}</span></td><td><span class="status-label"><span class="status-dot ${statusClass(t.status)}"></span>${esc(STATUS[t.status])}</span></td><td>${priorityPill(t.priority)}</td><td><div class="member-cell">${t.assigneeName ? `${avatar(t.assigneeName, "small-avatar")}${esc(t.assigneeName)}` : '<span class="muted small">Unassigned</span>'}</div></td><td>${duePill(t) || '<span class="muted small">—</span>'}</td></tr>`).join("")}</tbody></table></div>`;
 }
 function renderTasks() {
   const focusId = document.activeElement?.id;
@@ -867,6 +990,7 @@ function renderTasks() {
       `<a class="secondary" href="${base()}/export" download="orbit-tasks.csv">${icon("download")}Export CSV</a>`,
       "YOUR WORKSPACE",
     ) +
+    savedViewsBar() +
     `<div class="toolbar"><div class="filters"><div class="search-field">${icon("search")}<label class="sr-only" for="task-search">Search tasks</label><input id="task-search" type="search" placeholder="Find a task…" maxlength="200" value="${esc(f.q)}" data-filter="q"></div><label class="sr-only" for="filter-project">Project</label><select class="filter-select" id="filter-project" data-filter="projectId"><option value="">All projects</option>${state.projects.map((p) => `<option value="${esc(p.id)}"${p.id === f.projectId ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select><label class="sr-only" for="filter-status">Status</label><select class="filter-select" id="filter-status" data-filter="status">${options(STATUS, f.status, "All statuses")}</select><label class="sr-only" for="filter-priority">Priority</label><select class="filter-select" id="filter-priority" data-filter="priority">${options(PRIORITY, f.priority, "All priorities")}</select><label class="sr-only" for="filter-assignee">Assignee</label><select class="filter-select" id="filter-assignee" data-filter="assigneeId"><option value="">Everyone</option>${state.members.map((m) => `<option value="${esc(m.id)}"${m.id === f.assigneeId ? " selected" : ""}>${esc(m.name)}</option>`).join("")}</select></div><div class="view-toggle" role="group" aria-label="Task view"><button data-action="task-board" class="${state.taskView === "board" ? "active" : ""}" aria-pressed="${state.taskView === "board"}">${icon("board")}Board</button><button data-action="task-list" class="${state.taskView === "list" ? "active" : ""}" aria-pressed="${state.taskView === "list"}">${icon("list")}List</button></div></div><div class="results-note"><span>${tasks.total} ${tasks.total === 1 ? "task" : "tasks"}${filtered ? " match your filters" : " across your workspace"} · ${tasks.items.length} loaded</span>${filtered ? '<button data-action="filters-clear">Clear filters</button>' : ""}</div>${
       tasks.items.length
         ? state.taskView === "list"
@@ -879,11 +1003,266 @@ function renderTasks() {
               .join("")}</div>`
         : `<div class="panel">${empty(filtered ? "Nothing here just yet" : "Every project starts with a next step", filtered ? "Try a different search or clear your filters." : "Create your first task and give that idea a little momentum.", !filtered && writable() ? "task-create" : "", "Create a task", "tasks")}</div>`
     }${tasks.items.length < tasks.total ? `<div class="load-more"><button class="secondary" data-action="tasks-more">Load more tasks ${icon("arrow")}</button><span>${tasks.items.length} of ${tasks.total}</span></div>` : ""}`;
+  $(".results-note").insertAdjacentHTML(
+    "beforebegin",
+    `<div class="task-tools">${writable() && tasks.items.length ? `<label class="select-loaded"><input id="select-loaded" type="checkbox"${state.bulkBusy ? " disabled" : ""}>Select ${tasks.items.length > 100 ? "first 100 loaded" : "loaded tasks"}</label>` : '<span class="muted small">Your workspace, your focus.</span>'}<div><button class="text-button" data-action="filters-copy">${icon("link")}Copy view link</button>${filtered ? '<button class="text-button" data-action="saved-view-create">Save this view</button>' : ""}</div></div><div id="bulk-region">${bulkToolbar()}</div>`,
+  );
+  const selected = $("#select-loaded");
+  if (selected) {
+    const count = tasks.items
+      .slice(0, 100)
+      .filter((task) => state.selectedTasks.has(task.id)).length;
+    selected.checked = Boolean(
+      count && count === Math.min(tasks.items.length, 100),
+    );
+    selected.indeterminate = count > 0 && !selected.checked;
+  }
   if (focusId && $(`#${CSS.escape(focusId)}`)) {
     const field = $(`#${CSS.escape(focusId)}`);
     field.focus({ preventScroll: true });
     if (cursor !== null && field.type === "search")
       field.setSelectionRange(cursor, cursor);
+  }
+}
+function sameFilters(a, b) {
+  return FILTER_KEYS.every((key) => (a[key] || "") === (b[key] || ""));
+}
+function savedFilters(filters) {
+  return Object.fromEntries(
+    FILTER_KEYS.map((key) => [key, filters[key] || null]),
+  );
+}
+function savedViewsBar() {
+  const active = state.savedViews.find(
+    (view) => view.id === state.activeSavedView,
+  );
+  const modified = active && !sameFilters(active, state.filters);
+  return `<div class="saved-views"><div class="saved-view-label">${icon("filter")}YOUR VIEWS <span class="private-note">Private to you</span></div><div class="saved-view-chips"><button class="view-chip${!Object.values(state.filters).some(Boolean) ? " active" : ""}" data-action="filters-clear">All tasks</button><button class="view-chip${state.filters.assigneeId === state.user.id && FILTER_KEYS.filter((key) => key !== "assigneeId").every((key) => !state.filters[key]) ? " active" : ""}" data-action="tasks-assigned">Assigned to me</button>${state.savedViews.map((view) => `<button class="view-chip${active?.id === view.id ? " active" : ""}" data-action="saved-view-apply" data-id="${esc(view.id)}" aria-pressed="${active?.id === view.id}" title="${esc(view.label)}">${esc(view.label)}${active?.id === view.id && modified ? '<span aria-label="Modified">•</span>' : ""}</button>`).join("")}<button class="view-chip view-chip-add" data-action="saved-view-create">${icon("plus")}Save view</button></div>${active ? `<div class="active-view-actions"><span>${modified ? "Filters changed" : "Saved filters applied"}</span>${modified ? `<button data-action="saved-view-update" data-id="${esc(active.id)}">Update saved filters</button>` : ""}<button data-action="saved-view-edit" data-id="${esc(active.id)}">Edit view</button></div>` : ""}</div>`;
+}
+function bulkToolbar() {
+  if (!state.selectedTasks.size) return "";
+  const changes = state.bulkChanges;
+  const disabled = state.bulkBusy ? " disabled" : "";
+  return `<section class="bulk-toolbar" aria-label="Update selected tasks" aria-busy="${state.bulkBusy}"><div class="bulk-summary"><strong>${state.selectedTasks.size} selected</strong><button class="icon-button" data-action="selection-clear" aria-label="Clear task selection"${disabled}>${icon("close")}</button></div><div class="bulk-fields"><label for="bulk-status">Status<select id="bulk-status" data-bulk="status"${disabled}>${options(STATUS, changes.status, "Keep status")}</select></label><label for="bulk-priority">Priority<select id="bulk-priority" data-bulk="priority"${disabled}>${options(PRIORITY, changes.priority, "Keep priority")}</select></label><label for="bulk-assignee">Assignee<select id="bulk-assignee" data-bulk="assignee"${disabled}><option value="">Keep assignee</option><option value="__clear"${changes.assignee === "__clear" ? " selected" : ""}>Unassigned</option>${state.members.map((member) => `<option value="${esc(member.id)}"${changes.assignee === member.id ? " selected" : ""}>${esc(member.name)}</option>`).join("")}</select></label></div><button class="primary" id="bulk-apply" data-action="bulk-apply"${state.bulkBusy || !Object.values(changes).some(Boolean) || state.bulkError ? " disabled" : ""}>${state.bulkBusy ? "Saving changes…" : "Apply changes"}</button>${state.bulkError ? `<div class="bulk-error" role="alert">${icon("alert")}<span>${esc(state.bulkError)}</span><button data-action="bulk-refresh">Refresh tasks</button></div>` : '<p class="bulk-hint">Changes apply to every selected task together.</p>'}</section>`;
+}
+async function applyBulkChanges() {
+  if (
+    !writable() ||
+    state.bulkBusy ||
+    state.taskLoading ||
+    !state.selectedTasks.size
+  )
+    return;
+  const captured = context();
+  const selectionGeneration = state.selectionGeneration;
+  const tasks = [...state.selectedTasks.values()];
+  const changes = { ...state.bulkChanges };
+  if (!Object.values(changes).some(Boolean)) return;
+  const body = {
+    taskIds: tasks.map((task) => task.id),
+    versions: Object.fromEntries(tasks.map((task) => [task.id, task.version])),
+  };
+  if (changes.status) body.status = changes.status;
+  if (changes.priority) body.priority = changes.priority;
+  if (changes.assignee === "__clear") body.clearAssignee = true;
+  else if (changes.assignee) body.assigneeId = changes.assignee;
+  state.bulkBusy = true;
+  state.bulkError = "";
+  renderTasks();
+  try {
+    await api(`${endpointFor(captured.workspace)}/tasks/bulk`, {
+      method: "POST",
+      body,
+    });
+    if (
+      !sameContext(captured) ||
+      selectionGeneration !== state.selectionGeneration
+    )
+      return;
+    clearSelection();
+    toast(
+      `${tasks.length} ${tasks.length === 1 ? "task updated" : "tasks updated"}.`,
+    );
+    if (state.page === "tasks") await loadPage(true);
+  } catch (error) {
+    if (
+      !sameContext(captured) ||
+      selectionGeneration !== state.selectionGeneration
+    )
+      return;
+    state.bulkBusy = false;
+    state.bulkError =
+      error.status === 409
+        ? "A selected task changed while you were planning. None of your changes were applied. Refresh, then select the tasks again."
+        : error.message;
+    if (state.page === "tasks") renderTasks();
+  }
+}
+function changeFilters(filters, replace = false) {
+  clearTimeout(searchTimer);
+  clearSelection();
+  state.filters = { ...blankFilters(), ...filters };
+  writeRoute("tasks", null, replace);
+  if (state.page === "tasks") loadPage(true);
+  else navigate("tasks");
+}
+function pendingTaskFilters() {
+  state.taskLoading = true;
+  if ($("#bulk-region") && !state.selectedTasks.size)
+    $("#bulk-region").replaceChildren();
+  document
+    .querySelectorAll("[data-task-select], #select-loaded")
+    .forEach((field) => {
+      field.disabled = true;
+      if (!state.selectedTasks.size) field.checked = false;
+    });
+  const results = $(".results-note > span");
+  if (results && state.page === "tasks") {
+    results.setAttribute("role", "status");
+    results.textContent = "Updating tasks…";
+  }
+}
+function applySavedView(id) {
+  const view = state.savedViews.find((item) => item.id === id);
+  if (!view || state.savedViewsWorkspace !== state.workspace?.id) return;
+  state.activeSavedView = id;
+  changeFilters(
+    Object.fromEntries(FILTER_KEYS.map((key) => [key, view[key] || ""])),
+  );
+}
+function filterDescription(filters) {
+  const parts = [];
+  if (filters.q) parts.push(`Search: ${filters.q}`);
+  if (filters.status) parts.push(STATUS[filters.status]);
+  if (filters.priority) parts.push(`${PRIORITY[filters.priority]} priority`);
+  if (filters.projectId)
+    parts.push(
+      state.projects.find((p) => p.id === filters.projectId)?.name ||
+        "Selected project",
+    );
+  if (filters.assigneeId)
+    parts.push(
+      state.members.find((m) => m.id === filters.assigneeId)?.name ||
+        "Selected assignee",
+    );
+  return parts.join(" · ") || "All tasks in this workspace";
+}
+function savedViewForm(id = null) {
+  const view = state.savedViews.find((item) => item.id === id);
+  if (!state.workspace || (id && !view)) return;
+  const captured = context();
+  const filters = view
+    ? Object.fromEntries(FILTER_KEYS.map((key) => [key, view[key] || ""]))
+    : { ...state.filters };
+  openModal(
+    `${modalHead(view ? "Edit your view" : "Make room for your focus", "PRIVATE SAVED VIEW")}<form id="saved-view-form"><div class="modal-body"><div class="field"><label for="view-label">View name</label><input id="view-label" name="label" maxlength="80" required value="${esc(view?.label || "")}" placeholder="e.g. This week’s priorities"></div><div class="saved-view-preview">${icon("filter")}<span>${esc(filterDescription(filters))}</span></div><p class="muted small">Only you can see this saved view. Its filters stay ready for your next visit.</p><p class="form-message" data-form-error role="alert" tabindex="-1" hidden></p></div><div class="modal-footer">${view ? `<button type="button" class="danger-button" data-action="saved-view-delete" data-id="${esc(view.id)}">Delete view</button>` : ""}<button type="button" class="secondary" data-action="modal-close">Cancel</button><button type="submit" class="primary">${view ? "Save name" : "Save view"}</button></div></form>`,
+  );
+  const form = $("#saved-view-form");
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!sameContext(captured)) return;
+    setBusy(form, true);
+    try {
+      const body = {
+        label: $("#view-label", form).value.trim(),
+        ...savedFilters(filters),
+        ...(view ? { version: view.version } : {}),
+      };
+      const saved = await api(
+        `${endpointFor(captured.workspace)}/saved-views${view ? `/${view.id}` : ""}`,
+        { method: view ? "PATCH" : "POST", body },
+      );
+      if (!sameContext(captured)) return;
+      state.savedViews = view
+        ? state.savedViews.map((item) => (item.id === view.id ? saved : item))
+        : [...state.savedViews, saved];
+      state.activeSavedView = saved.id;
+      if (form.isConnected) modal.close();
+      toast(view ? "View renamed." : "Your view is saved.");
+      if (state.page === "tasks") renderTasks();
+    } catch (error) {
+      if (!sameContext(captured) || !form.isConnected) return;
+      formError(
+        error.status === 409
+          ? {
+              message:
+                "This saved view changed in another tab. Close this form and refresh your workspace before trying again.",
+            }
+          : error,
+        form,
+      );
+      setBusy(form, false);
+    }
+  });
+}
+async function updateSavedView(id) {
+  const view = state.savedViews.find((item) => item.id === id);
+  if (!view) return;
+  const captured = context();
+  const filters = { ...state.filters };
+  try {
+    const saved = await api(
+      `${endpointFor(captured.workspace)}/saved-views/${id}`,
+      {
+        method: "PATCH",
+        body: {
+          label: view.label,
+          version: view.version,
+          ...savedFilters(filters),
+        },
+      },
+    );
+    if (!sameContext(captured)) return;
+    state.savedViews = state.savedViews.map((item) =>
+      item.id === id ? saved : item,
+    );
+    if (state.page === "tasks") renderTasks();
+    toast("Saved filters updated.");
+  } catch (error) {
+    if (sameContext(captured))
+      toast(
+        error.status === 409
+          ? "This view changed in another tab. Refresh your workspace before updating it."
+          : error.message,
+        true,
+      );
+  }
+}
+async function deleteSavedView(id) {
+  const view = state.savedViews.find((item) => item.id === id);
+  const captured = context();
+  if (
+    !view ||
+    !(await confirmAction(
+      "Delete this view?",
+      `“${view.label}” will be removed from your private views. Your tasks stay in the workspace.`,
+      "Delete view",
+      true,
+    )) ||
+    !sameContext(captured)
+  )
+    return;
+  try {
+    await api(`${endpointFor(captured.workspace)}/saved-views/${id}`, {
+      method: "DELETE",
+    });
+    if (!sameContext(captured)) return;
+    state.savedViews = state.savedViews.filter((item) => item.id !== id);
+    if (state.activeSavedView === id) state.activeSavedView = null;
+    if ($("#saved-view-form")) modal.close();
+    if (state.page === "tasks") renderTasks();
+    toast("Saved view deleted.");
+  } catch (error) {
+    if (sameContext(captured)) toast(error.message, true);
+  }
+}
+async function copyViewLink() {
+  writeRoute("tasks", state.taskModal?.id);
+  try {
+    await navigator.clipboard.writeText(location.href);
+    toast("View link copied. Workspace members can open the same filters.");
+  } catch {
+    toast("Copy the view link from your address bar.");
   }
 }
 function renderTeam() {
@@ -914,6 +1293,8 @@ async function loadMore(type, button) {
   const data = type === "tasks" ? state.tasks : state.activity;
   const ws = state.workspace.id;
   const page = state.page;
+  const captured = context();
+  const request = state.request;
   const params = new URLSearchParams({
     page: String(data.page + 1),
     size: String(data.size),
@@ -924,7 +1305,13 @@ async function loadMore(type, button) {
     });
   try {
     const next = await api(`${base()}/${type}?${params}`);
-    if (ws !== state.workspace.id || page !== state.page) return;
+    if (
+      !sameContext(captured) ||
+      ws !== state.workspace?.id ||
+      page !== state.page ||
+      request !== state.request
+    )
+      return;
     const merged = { ...next, items: [...data.items, ...next.items] };
     if (type === "tasks") {
       state.tasks = merged;
@@ -934,19 +1321,21 @@ async function loadMore(type, button) {
       renderActivity();
     }
   } catch (error) {
+    if (!sameContext(captured) || request !== state.request) return;
     toast(error.message, true);
     if (button.isConnected) button.disabled = false;
   }
 }
 function openModal(content) {
+  if ($(".app-shell")?.classList.contains("menu-open")) setMenu(false);
   ++state.modalRequest;
   modal.innerHTML = content;
   if (!modal.open) modal.showModal();
-  modal
-    .querySelector(
-      "input:not([disabled]), textarea:not([disabled]), select:not([disabled]), button",
-    )
-    ?.focus();
+  (
+    modal.querySelector(
+      "input:not([disabled]), textarea:not([disabled]), select:not([disabled])",
+    ) || modal.querySelector("button")
+  )?.focus();
 }
 function modalHead(title, eyebrow = "") {
   return `<div class="modal-head"><div>${eyebrow ? `<div class="eyebrow">${esc(eyebrow)}</div>` : ""}<h2 id="modal-title">${esc(title)}</h2></div><button class="icon-button" data-action="modal-close" aria-label="Close dialog">${icon("close")}</button></div>`;
@@ -983,6 +1372,7 @@ function confirmAction(title, message, label = "Confirm", danger = false) {
   });
 }
 function workspaceForm() {
+  const captured = context();
   openModal(
     `${modalHead("A place for your team.", "CREATE WORKSPACE")}<form id="workspace-form"><div class="modal-body"><div class="field"><label for="workspace-name">Workspace name</label><input id="workspace-name" name="name" required minlength="2" maxlength="100" placeholder="e.g. Northstar Studio" autocomplete="organization"><small>Bring your projects and your people together here.</small></div><p class="form-message" data-form-error role="alert" tabindex="-1" hidden></p></div><div class="modal-footer"><button class="secondary" type="button" data-action="modal-close">Cancel</button><button class="primary" type="submit">Create workspace ${icon("arrow")}</button></div></form>`,
   );
@@ -995,6 +1385,7 @@ function workspaceForm() {
         method: "POST",
         body: { name: new FormData(form).get("name").trim() },
       });
+      if (!sameContext(captured) || !form.isConnected) return;
       state.workspace = workspace;
       state.workspaces = [...state.workspaces, workspace];
       state.filters = {
@@ -1004,9 +1395,7 @@ function workspaceForm() {
         projectId: "",
         assigneeId: "",
       };
-      state.tasks = null;
-      state.projects = [];
-      state.members = [];
+      resetWorkspaceState();
       rememberWorkspace();
       writeRoute();
       shell();
@@ -1014,6 +1403,7 @@ function workspaceForm() {
       toast("Your workspace is ready.");
       await loadWorkspace();
     } catch (error) {
+      if (!sameContext(captured) || !form.isConnected) return;
       formError(error, form);
       setBusy(form, false);
     }
@@ -1022,6 +1412,8 @@ function workspaceForm() {
 function projectForm(id) {
   const project = state.projects.find((p) => p.id === id);
   if (!writable()) return;
+  const captured = context();
+  const endpoint = base();
   const p = project || { name: "", description: "", color: COLORS.purple };
   openModal(
     `${modalHead(project ? "A little shape. A little focus." : "Make room for your next idea.", project ? "EDIT PROJECT" : "NEW PROJECT")}<form id="project-form"><div class="modal-body"><div class="form-grid"><div class="field full"><label for="project-name">Project name</label><input id="project-name" name="name" required maxlength="120" value="${esc(p.name)}" placeholder="e.g. Website refresh"></div><div class="field full"><label for="project-description">What’s the goal?</label><textarea id="project-description" name="description" maxlength="2000" placeholder="A little context goes a long way…">${esc(p.description)}</textarea></div><fieldset class="field full color-field"><legend class="small muted">Project color</legend><div class="color-options">${Object.entries(
@@ -1042,18 +1434,19 @@ function projectForm(id) {
     values.name = values.name.trim();
     setBusy(form, true);
     try {
-      await api(`${base()}/projects${project ? `/${project.id}` : ""}`, {
+      await api(`${endpoint}/projects${project ? `/${project.id}` : ""}`, {
         method: project ? "PATCH" : "POST",
         body: project
           ? { ...values, status: project.status, version: project.version }
           : values,
       });
+      if (!sameContext(captured) || !form.isConnected) return;
       modal.close();
       toast(project ? "Project updated." : "A new project, a fresh start.");
       await loadWorkspace();
     } catch (error) {
+      if (!sameContext(captured) || !form.isConnected) return;
       if (error.status === 409) {
-        state.projects = await api(`${base()}/projects`);
         formError(
           new Error(
             "This project changed since you opened it. Close and reopen it to review the latest changes.",
@@ -1066,7 +1459,10 @@ function projectForm(id) {
   });
 }
 async function archiveProject(id) {
+  const captured = context();
+  const endpoint = base();
   const project = state.projects.find((p) => p.id === id);
+  if (!project) return;
   const archived = project.status === "ACTIVE";
   if (
     !(await confirmAction(
@@ -1078,8 +1474,9 @@ async function archiveProject(id) {
     ))
   )
     return;
+  if (!sameContext(captured)) return;
   try {
-    await api(`${base()}/projects/${id}`, {
+    await api(`${endpoint}/projects/${id}`, {
       method: "PATCH",
       body: {
         name: project.name,
@@ -1089,31 +1486,37 @@ async function archiveProject(id) {
         version: project.version,
       },
     });
+    if (!sameContext(captured)) return;
     modal.close();
     toast(archived ? "Project archived." : "Project restored.");
     await loadWorkspace();
   } catch (error) {
+    if (!sameContext(captured)) return;
     toast(error.message, true);
   }
 }
 async function openTask(id, updateLink = true) {
+  if (!state.user || !state.workspace) return;
+  commands.close();
   if (updateLink) writeRoute(state.page, id, false);
   openModal(
     `${modalHead("Finding your task…")}<div class="loading-state" role="status"><span class="spinner"></span>Loading the latest details</div>`,
   );
   const ws = state.workspace.id;
+  const captured = context();
   const request = state.modalRequest;
   try {
     const task = await api(`${base()}/tasks/${encodeURIComponent(id)}`);
     if (
       !modal.open ||
-      state.workspace.id !== ws ||
+      !sameContext(captured) ||
+      state.workspace?.id !== ws ||
       request !== state.modalRequest
     )
       return;
     taskForm(task);
   } catch (error) {
-    if (modal.open && request === state.modalRequest) {
+    if (sameContext(captured) && modal.open && request === state.modalRequest) {
       openModal(
         `${modalHead("A small interruption.")}<div class="modal-body"><div class="inline-error" role="alert">${icon("alert")}${esc(error.message)}</div></div>`,
       );
@@ -1136,6 +1539,8 @@ async function copyTaskLink() {
 }
 function taskForm(task = null, status = "TODO") {
   if (!task && !writable()) return;
+  const captured = context();
+  const endpoint = base();
   const t = task || {
     title: "",
     description: "",
@@ -1165,14 +1570,16 @@ function taskForm(task = null, status = "TODO") {
     if (task) body.version = task.version;
     setBusy(form, true);
     try {
-      await api(`${base()}/tasks${task ? `/${task.id}` : ""}`, {
+      await api(`${endpoint}/tasks${task ? `/${task.id}` : ""}`, {
         method: task ? "PATCH" : "POST",
         body,
       });
+      if (!sameContext(captured) || !form.isConnected) return;
       modal.close();
       toast(task ? "Your changes are saved." : "Your next step is ready.");
       await loadWorkspace();
     } catch (error) {
+      if (!sameContext(captured) || !form.isConnected) return;
       if (error.status === 409) {
         formError(
           new Error(
@@ -1199,14 +1606,16 @@ function taskForm(task = null, status = "TODO") {
       setBusy(form, true);
       $("#comment-error").hidden = true;
       try {
-        await api(`${base()}/tasks/${task.id}/comments`, {
+        await api(`${endpoint}/tasks/${task.id}/comments`, {
           method: "POST",
           body: { body },
         });
+        if (!sameContext(captured) || !form.isConnected) return;
         form.reset();
         await loadComments(task.id);
         toast("Comment added.");
       } catch (error) {
+        if (!sameContext(captured) || !form.isConnected) return;
         $("#comment-error").textContent = error.message;
         $("#comment-error").hidden = false;
       } finally {
@@ -1216,9 +1625,17 @@ function taskForm(task = null, status = "TODO") {
   }
 }
 async function loadComments(id) {
+  const captured = context();
+  const request = state.modalRequest;
   try {
     const comments = await api(`${base()}/tasks/${id}/comments`);
-    if (state.taskModal?.id !== id || !$("#comments")) return;
+    if (
+      !sameContext(captured) ||
+      request !== state.modalRequest ||
+      state.taskModal?.id !== id ||
+      !$("#comments")
+    )
+      return;
     $("#comment-total").textContent = `(${comments.length})`;
     $("#comments").innerHTML = comments.length
       ? comments
@@ -1229,13 +1646,19 @@ async function loadComments(id) {
           .join("")
       : '<p class="small muted">Start the conversation. A little context helps everyone.</p>';
   } catch (error) {
-    if (state.taskModal?.id === id && $("#comments"))
+    if (
+      sameContext(captured) &&
+      request === state.modalRequest &&
+      state.taskModal?.id === id &&
+      $("#comments")
+    )
       $("#comments").innerHTML =
         `<p class="form-message" role="alert">${esc(error.message)}</p>`;
   }
 }
 async function deleteTask(id) {
   const task = state.taskModal;
+  const captured = context();
   if (!task || task.id !== id) return;
   if (
     !(await confirmAction(
@@ -1246,14 +1669,17 @@ async function deleteTask(id) {
     ))
   )
     return;
+  if (!sameContext(captured)) return;
   try {
     await api(`${base()}/tasks/${id}?version=${task.version}`, {
       method: "DELETE",
     });
+    if (!sameContext(captured)) return;
     modal.close();
     toast("Task deleted.");
     await loadWorkspace();
   } catch (error) {
+    if (!sameContext(captured)) return;
     toast(
       error.status === 409
         ? "This task changed. Close and reopen it before deleting."
@@ -1285,6 +1711,7 @@ function editableTask(task) {
   };
 }
 async function changeTaskStatus(id, status, element) {
+  const captured = context();
   const known =
     state.tasks?.items.find((t) => t.id === id) ||
     state.overview?.upcomingTasks.find((t) => t.id === id);
@@ -1298,6 +1725,7 @@ async function changeTaskStatus(id, status, element) {
         status: status || (known.status === "DONE" ? "TODO" : "DONE"),
       },
     });
+    if (!sameContext(captured)) return;
     toast(
       status
         ? "Task status updated."
@@ -1307,6 +1735,7 @@ async function changeTaskStatus(id, status, element) {
     );
     await loadWorkspace();
   } catch (error) {
+    if (!sameContext(captured)) return;
     toast(
       error.status === 409
         ? "Someone updated this task. Review the latest version and try again."
@@ -1318,6 +1747,8 @@ async function changeTaskStatus(id, status, element) {
 }
 function memberForm() {
   if (!owner()) return;
+  const captured = context();
+  const endpoint = base();
   openModal(
     `${modalHead("Bring someone into the picture.", "ADD TEAM MEMBER")}<form id="member-form"><div class="modal-body"><div class="form-grid"><div class="field full"><label for="member-email">Their Orbit account email</label><input id="member-email" name="email" type="email" required maxlength="254" placeholder="teammate@yourteam.com"><small>They need to create an Orbit account first. No email invitation is sent.</small></div><div class="field full"><label for="member-role">Workspace role</label><select id="member-role" name="role">${options({ MEMBER: "Member — edit projects, tasks, and comments", VIEWER: "Viewer — read access only" }, "MEMBER")}</select></div><p class="form-message" data-form-error role="alert" tabindex="-1" hidden></p></div></div><div class="modal-footer"><button class="secondary" type="button" data-action="modal-close">Cancel</button><button class="primary" type="submit">Add to workspace ${icon("arrow")}</button></div></form>`,
   );
@@ -1326,34 +1757,42 @@ function memberForm() {
     const form = event.currentTarget;
     setBusy(form, true);
     try {
-      await api(`${base()}/members`, {
+      await api(`${endpoint}/members`, {
         method: "POST",
         body: Object.fromEntries(new FormData(form)),
       });
+      if (!sameContext(captured) || !form.isConnected) return;
       modal.close();
       toast("A new teammate, a little more possibility.");
       await loadWorkspace();
     } catch (error) {
+      if (!sameContext(captured) || !form.isConnected) return;
       formError(error, form);
       setBusy(form, false);
     }
   });
 }
 async function changeMemberRole(id, role, element) {
+  const captured = context();
   const member = state.members.find((m) => m.id === id);
   element.disabled = true;
   try {
     await api(`${base()}/members/${id}`, { method: "PATCH", body: { role } });
+    if (!sameContext(captured)) return;
     toast(`${member.name} now has ${role.toLowerCase()} access.`);
     await loadWorkspace();
   } catch (error) {
+    if (!sameContext(captured) || !element.isConnected) return;
     toast(error.message, true);
     element.value = member.role;
     element.disabled = false;
   }
 }
 async function removeMember(id) {
+  const captured = context();
+  const endpoint = base();
   const member = state.members.find((m) => m.id === id);
+  if (!member) return;
   if (
     !(await confirmAction(
       "Remove this teammate?",
@@ -1363,15 +1802,19 @@ async function removeMember(id) {
     ))
   )
     return;
+  if (!sameContext(captured)) return;
   try {
-    await api(`${base()}/members/${id}`, { method: "DELETE" });
+    await api(`${endpoint}/members/${id}`, { method: "DELETE" });
+    if (!sameContext(captured)) return;
     toast("Member removed from the workspace.");
     await loadWorkspace();
   } catch (error) {
+    if (!sameContext(captured)) return;
     toast(error.message, true);
   }
 }
 function renderAccount() {
+  const userId = state.user?.id;
   const a = state.account;
   $("#page-content").innerHTML =
     pageHeader(
@@ -1387,16 +1830,19 @@ function renderAccount() {
     setBusy(form, true);
     $("[data-form-error]", form).hidden = true;
     try {
-      state.account = await api("/api/account", {
+      const updated = await api("/api/account", {
         method: "PATCH",
         body: { name: new FormData(form).get("name").trim() },
       });
+      if (state.user?.id !== userId || !form.isConnected) return;
+      state.account = updated;
       state.user = { ...state.user, ...state.account };
       shell();
       if (state.workspace) await loadWorkspace();
       else await loadPage();
       toast("Your profile is up to date.");
     } catch (error) {
+      if (state.user?.id !== userId || !form.isConnected) return;
       formError(error, form);
       if (form.isConnected) setBusy(form, false);
     }
@@ -1418,10 +1864,12 @@ function renderAccount() {
           newPassword: values.newPassword,
         },
       });
+      if (state.user?.id !== userId) return;
       await signedOut(
         "Your password is updated. Sign in again with the new one.",
       );
     } catch (error) {
+      if (state.user?.id !== userId || !form.isConnected) return;
       formError(error, form);
       if (form.isConnected) setBusy(form, false);
     }
@@ -1432,6 +1880,7 @@ function renderAccount() {
   );
 }
 async function revokeSession(id) {
+  const userId = state.user?.id;
   const session = state.sessions.find((s) => s.id === id);
   if (!session) return;
   if (
@@ -1444,33 +1893,46 @@ async function revokeSession(id) {
     ))
   )
     return;
+  if (state.user?.id !== userId) return;
   try {
     await api(`/api/account/sessions/${encodeURIComponent(id)}`, {
       method: "DELETE",
     });
+    if (state.user?.id !== userId) return;
     if (session.current) await signedOut("This session has ended.");
     else {
       await loadPage();
       toast("Session ended.");
     }
   } catch (error) {
+    if (state.user?.id !== userId) return;
     toast(error.message, true);
   }
 }
 async function requestAccountVerification(button) {
+  const userId = state.user?.id;
+  const status = $("#verification-status");
   button.disabled = true;
   try {
     const result = await api("/api/account/verification", { method: "POST" });
-    $("#verification-status").textContent =
-      `${result.message} Check your inbox; another link can be sent after a minute.`;
+    if (
+      state.user?.id !== userId ||
+      !button.isConnected ||
+      !status?.isConnected
+    )
+      return;
+    status.textContent = `${result.message} Check your inbox; another link can be sent after a minute.`;
     toast("Check your inbox for your verification link.");
   } catch (error) {
+    if (state.user?.id !== userId || !button.isConnected) return;
     toast(error.message, true);
   } finally {
     if (button.isConnected) button.disabled = false;
   }
 }
 function renderSettings() {
+  const captured = context();
+  const endpoint = base();
   const settings = state.workspaceSettings;
   const canManage = settings.role === "OWNER";
   state.workspace = {
@@ -1494,13 +1956,15 @@ function renderSettings() {
     setBusy(form, true);
     $("[data-form-error]", form).hidden = true;
     try {
-      state.workspaceSettings = await api(`${base()}/settings`, {
+      const updated = await api(`${endpoint}/settings`, {
         method: "PATCH",
         body: {
           name: new FormData(form).get("name").trim(),
           version: settings.version,
         },
       });
+      if (!sameContext(captured) || !form.isConnected) return;
+      state.workspaceSettings = updated;
       state.workspace = { ...state.workspace, ...state.workspaceSettings };
       state.workspaces = state.workspaces.map((w) =>
         w.id === state.workspace.id ? { ...w, name: state.workspace.name } : w,
@@ -1509,6 +1973,7 @@ function renderSettings() {
       await loadPage();
       toast("Your workspace has a fresh name.");
     } catch (error) {
+      if (!sameContext(captured) || !form.isConnected) return;
       formError(
         error.status === 409
           ? new Error(
@@ -1526,19 +1991,23 @@ function renderSettings() {
     setBusy(form, true);
     $("[data-form-error]", form).hidden = true;
     try {
-      await api(`${base()}/invitations`, {
+      await api(`${endpoint}/invitations`, {
         method: "POST",
         body: Object.fromEntries(new FormData(form)),
       });
+      if (!sameContext(captured) || !form.isConnected) return;
       toast("Invitation queued for email delivery.");
       await loadPage();
     } catch (error) {
+      if (!sameContext(captured) || !form.isConnected) return;
       formError(error, form);
       if (form.isConnected) setBusy(form, false);
     }
   });
 }
 async function revokeInvitation(id) {
+  const captured = context();
+  const endpoint = base();
   const invitation = state.invitations.find((i) => i.id === id);
   if (
     !invitation ||
@@ -1550,13 +2019,16 @@ async function revokeInvitation(id) {
     ))
   )
     return;
+  if (!sameContext(captured)) return;
   try {
-    await api(`${base()}/invitations/${encodeURIComponent(id)}`, {
+    await api(`${endpoint}/invitations/${encodeURIComponent(id)}`, {
       method: "DELETE",
     });
+    if (!sameContext(captured)) return;
     toast("Invitation revoked.");
     await loadPage();
   } catch (error) {
+    if (!sameContext(captured)) return;
     toast(error.message, true);
   }
 }
@@ -1575,9 +2047,10 @@ function updateUnreadBadge() {
 }
 async function refreshUnread() {
   if (!state.user) return;
+  const userId = state.user.id;
   try {
     const data = await api("/api/notifications?page=0&size=1");
-    if (!state.user) return;
+    if (state.user?.id !== userId) return;
     state.unreadNotifications = data.unreadCount;
     updateUnreadBadge();
   } catch {
@@ -1598,11 +2071,14 @@ function renderNotifications() {
     `<div class="results-note"><span>${data.unreadCount} unread · ${data.total} total updates</span><button data-action="notifications-refresh">Refresh inbox</button></div><div class="panel notification-list">${data.items.length ? data.items.map((n) => `<article class="notification-row ${n.read ? "" : "unread"}"><div class="notification-symbol">${icon(n.type === "TASK_ASSIGNED" || n.type === "ASSIGNED" ? "tasks" : "comment")}</div><div class="notification-copy"><button class="notification-title" data-action="notification-open" data-id="${esc(n.id)}">${esc(n.title)}</button><p>${esc(n.body)}</p><div class="notification-meta"><span>${esc(n.workspaceName)}</span><time datetime="${esc(n.createdAt)}">${esc(formatTime(n.createdAt))}</time>${!n.read ? '<span class="unread-label">Unread</span>' : ""}</div></div>${!n.read ? `<button class="icon-button" data-action="notification-read" data-id="${esc(n.id)}" aria-label="Mark ${esc(n.title)} as read">${icon("check")}</button>` : ""}</article>`).join("") : empty("A little peace and quiet.", "Assignments, conversation updates, and changes to workspace access will appear here.", "", "", "bell")}</div>${data.items.length < data.total ? `<div class="load-more"><button class="secondary" data-action="notifications-more">Load older notifications ${icon("arrow")}</button><span>${data.items.length} of ${data.total}</span></div>` : ""}`;
 }
 async function readNotification(id, rerender = true) {
+  const userId = state.user?.id;
+  const current = state.notifications;
   const item = state.notifications?.items.find((n) => n.id === id);
   if (!item || item.read) return;
   await api(`/api/notifications/${encodeURIComponent(id)}/read`, {
     method: "PATCH",
   });
+  if (state.user?.id !== userId || state.notifications !== current) return;
   item.read = true;
   state.notifications.unreadCount = Math.max(
     0,
@@ -1613,15 +2089,21 @@ async function readNotification(id, rerender = true) {
   updateUnreadBadge();
 }
 async function openNotification(id) {
+  const userId = state.user?.id;
+  const request = state.request;
   const item = state.notifications?.items.find((n) => n.id === id);
   if (!item) return;
   try {
     await readNotification(id, false);
-    state.workspaces = await api("/api/workspaces");
+    if (state.user?.id !== userId || request !== state.request) return;
+    const workspaces = await api("/api/workspaces");
+    if (state.user?.id !== userId || request !== state.request) return;
+    state.workspaces = workspaces;
     const workspace = state.workspaces.find((w) => w.id === item.workspaceId);
     if (!workspace)
       throw new Error("You no longer have access to this workspace.");
     state.workspace = workspace;
+    resetWorkspaceState();
     state.filters = {
       q: "",
       status: "",
@@ -1636,23 +2118,32 @@ async function openNotification(id) {
     await loadWorkspace();
     if (item.taskId) await openTask(item.taskId, false);
   } catch (error) {
+    if (state.user?.id !== userId) return;
     toast(error.message, true);
     if (state.page === "notifications") renderNotifications();
   }
 }
 async function loadMoreNotifications(button) {
+  const userId = state.user?.id;
+  const request = state.request;
   button.disabled = true;
   const current = state.notifications;
   try {
     const data = await api(
       `/api/notifications?page=${current.page + 1}&size=${current.size}`,
     );
-    if (state.page !== "notifications") return;
+    if (
+      state.user?.id !== userId ||
+      request !== state.request ||
+      state.page !== "notifications"
+    )
+      return;
     state.notifications = { ...data, items: [...current.items, ...data.items] };
     state.unreadNotifications = data.unreadCount;
     renderNotifications();
     updateUnreadBadge();
   } catch (error) {
+    if (state.user?.id !== userId || request !== state.request) return;
     toast(error.message, true);
     if (button.isConnected) button.disabled = false;
   }
@@ -1707,6 +2198,13 @@ async function invitationScreen(token) {
 }
 async function signedOut(message, preserveRoute = false) {
   state.request++;
+  state.modalRequest++;
+  commands.close();
+  modal.close();
+  confirmModal.close();
+  clearTimeout(searchTimer);
+  state.filters = blankFilters();
+  resetWorkspaceState();
   state.user = null;
   state.account = null;
   state.workspace = null;
@@ -1738,6 +2236,30 @@ document.addEventListener("click", async (event) => {
   if (!target) return;
   const action = target.dataset.action;
   const id = target.dataset.id;
+  if (action === "commands-open") {
+    if ($(".app-shell")?.classList.contains("menu-open")) setMenu(false);
+    commands.open();
+  }
+  if (action === "shortcuts") shortcutsDialog();
+  if (action === "saved-view-create") savedViewForm();
+  if (action === "saved-view-edit") savedViewForm(id);
+  if (action === "saved-view-apply") applySavedView(id);
+  if (action === "saved-view-update") updateSavedView(id);
+  if (action === "saved-view-delete") deleteSavedView(id);
+  if (action === "tasks-assigned") {
+    state.activeSavedView = null;
+    changeFilters({ assigneeId: state.user.id });
+  }
+  if (action === "filters-copy") copyViewLink();
+  if (action === "bulk-apply") applyBulkChanges();
+  if (action === "selection-clear") {
+    clearSelection();
+    renderTasks();
+  }
+  if (action === "bulk-refresh") {
+    clearSelection();
+    loadPage();
+  }
   if (action === "auth-login") authView("login");
   if (action === "auth-register") authView("register");
   if (action === "forgot-password")
@@ -1816,23 +2338,19 @@ document.addEventListener("click", async (event) => {
   if (action === "task-complete") changeTaskStatus(id, null, target);
   if (action === "task-board") {
     state.taskView = "board";
+    writeRoute("tasks", null, false);
     renderTasks();
   }
   if (action === "task-list") {
     state.taskView = "list";
+    writeRoute("tasks", null, false);
     renderTasks();
   }
   if (action === "tasks-more") loadMore("tasks", target);
   if (action === "activity-more") loadMore("activity", target);
   if (action === "filters-clear") {
-    state.filters = {
-      q: "",
-      status: "",
-      priority: "",
-      projectId: "",
-      assigneeId: "",
-    };
-    loadPage();
+    state.activeSavedView = null;
+    changeFilters(blankFilters());
   }
   if (action === "member-add") memberForm();
   if (action === "member-remove") removeMember(id);
@@ -1855,17 +2373,74 @@ document.addEventListener("click", (event) => {
 let searchTimer;
 document.addEventListener("input", (event) => {
   if (event.target.dataset.filter === "q") {
+    clearSelection();
     state.filters.q = event.target.value;
+    writeRoute("tasks", null, true);
+    const captured = context();
+    const request = ++state.request;
+    pendingTaskFilters();
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => loadPage(true), 320);
+    searchTimer = setTimeout(() => {
+      if (
+        sameContext(captured) &&
+        state.page === "tasks" &&
+        request === state.request
+      )
+        loadPage(true);
+    }, 320);
   }
 });
 document.addEventListener("change", (event) => {
   const el = event.target;
   if (el.dataset.filter && el.dataset.filter !== "q") {
+    clearSelection();
     state.filters[el.dataset.filter] = el.value;
     clearTimeout(searchTimer);
+    writeRoute("tasks", null, false);
     loadPage(true);
+  }
+  if (el.dataset.taskSelect && !state.bulkBusy && !state.taskLoading) {
+    const task = state.tasks?.items.find(
+      (item) => item.id === el.dataset.taskSelect,
+    );
+    if (!task) return;
+    if (el.checked && state.selectedTasks.size >= 100) {
+      el.checked = false;
+      toast("Select up to 100 tasks at a time.", true);
+      return;
+    }
+    if (el.checked) state.selectedTasks.set(task.id, { ...task });
+    else state.selectedTasks.delete(task.id);
+    state.selectionGeneration++;
+    state.bulkError = "";
+    renderTasks();
+  }
+  if (el.id === "select-loaded" && !state.bulkBusy && !state.taskLoading) {
+    state.selectionGeneration++;
+    if (el.checked)
+      state.tasks.items
+        .slice(0, 100)
+        .forEach((task) => state.selectedTasks.set(task.id, { ...task }));
+    else clearSelection();
+    renderTasks();
+  }
+  if (el.dataset.bulk) {
+    state.bulkChanges[el.dataset.bulk] = el.value;
+    $("#bulk-apply").disabled =
+      state.bulkBusy ||
+      Boolean(state.bulkError) ||
+      !Object.values(state.bulkChanges).some(Boolean);
+  }
+  if (el.id === "single-key-shortcuts") {
+    state.singleKeyShortcuts = el.checked;
+    try {
+      localStorage.setItem(
+        "orbit.single-key-shortcuts",
+        el.checked ? "enabled" : "disabled",
+      );
+    } catch {
+      /* Keyboard preferences still apply for this visit. */
+    }
   }
   if (el.dataset.taskStatus)
     changeTaskStatus(el.dataset.taskStatus, el.value, el);
@@ -1873,15 +2448,53 @@ document.addEventListener("change", (event) => {
     changeMemberRole(el.dataset.memberRole, el.value, el);
 });
 document.addEventListener("keydown", (event) => {
+  const editing =
+    ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName) ||
+    event.target.isContentEditable;
+  if (
+    state.user &&
+    (event.metaKey || event.ctrlKey) &&
+    event.key.toLowerCase() === "k"
+  ) {
+    if (modal.open || confirmModal.open) return;
+    event.preventDefault();
+    if ($(".app-shell")?.classList.contains("menu-open")) setMenu(false);
+    commands.open();
+    return;
+  }
+  if (
+    !state.user ||
+    modal.open ||
+    confirmModal.open ||
+    commandDialog.open ||
+    editing ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey ||
+    !state.singleKeyShortcuts
+  )
+    return;
   if (
     event.key === "/" &&
     state.user &&
     !modal.open &&
     !confirmModal.open &&
-    !["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)
+    !editing
   ) {
     event.preventDefault();
-    $("#global-search")?.focus();
+    const captured = context();
+    navigate("tasks").then(() => {
+      if (sameContext(captured) && state.page === "tasks")
+        $("#task-search")?.focus();
+    });
+  }
+  if (event.key.toLowerCase() === "n" && writable()) {
+    event.preventDefault();
+    taskForm();
+  }
+  if (event.key === "?") {
+    event.preventDefault();
+    shortcutsDialog();
   }
 });
 document.addEventListener("keydown", (event) => {
@@ -1895,6 +2508,8 @@ document.addEventListener("keydown", (event) => {
 });
 window.matchMedia("(max-width:700px)").addEventListener("change", syncDrawer);
 modal.addEventListener("close", () => {
+  if (modal.open) return;
+  state.modalRequest++;
   state.taskModal = null;
   if (state.user && route().task) writeRoute(state.page);
 });
@@ -1910,32 +2525,69 @@ modal.addEventListener("click", (event) => {
     modal.close();
 });
 window.addEventListener("hashchange", async () => {
+  const hash = location.hash;
   if (await specialRoute()) return;
   const current = route();
+  const userId = state.user?.id;
   if (!state.user || !PAGES.includes(current.page)) return;
   if (current.workspace && current.workspace !== state.workspace?.id) {
     state.workspace =
-      state.workspaces.find((w) => w.id === current.workspace) ||
-      state.workspace;
+      state.workspaces.find((w) => w.id === current.workspace) || null;
     rememberWorkspace();
     state.page = current.page;
-    state.filters = {
-      q: "",
-      status: "",
-      priority: "",
-      projectId: "",
-      assigneeId: "",
-    };
+    resetWorkspaceState();
+    restoreFilters(current);
+    modal.close();
     shell();
     if (state.workspace) await loadWorkspace();
+    else
+      pageError({
+        message:
+          "This workspace isn’t available to your account. Choose a workspace from the menu.",
+      });
   } else if (current.page !== state.page) {
     state.page = current.page;
+    restoreFilters(current);
     shell();
     await loadPage();
+  } else if (
+    current.page === "tasks" &&
+    (!sameFilters(state.filters, current.filters) ||
+      state.taskView !== current.layout)
+  ) {
+    restoreFilters(current);
+    await loadPage(true);
   }
-  if (current.task && current.task !== state.taskModal?.id)
+  if (location.hash !== hash || state.user?.id !== userId) return;
+  if (current.task && state.workspace && current.task !== state.taskModal?.id)
     await openTask(current.task, false);
   else if (!current.task && state.taskModal) modal.close();
+});
+function shortcutsDialog() {
+  if (!state.user) return;
+  commands.close();
+  if ($(".app-shell")?.classList.contains("menu-open")) setMenu(false);
+  openModal(
+    `${modalHead("A little less reaching", "KEYBOARD SHORTCUTS")}<p class="muted">Move around Orbit without taking your hands off the keyboard.</p><dl class="shortcut-list"><div><dt>Commands and task search</dt><dd><kbd>Ctrl / ⌘</kbd> <kbd>K</kbd></dd></div><div><dt>Search tasks in this workspace</dt><dd><kbd>/</kbd></dd></div><div><dt>Create a task</dt><dd><kbd>N</kbd></dd></div><div><dt>Show these shortcuts</dt><dd><kbd>?</kbd></dd></div><div><dt>Close a dialog or navigation</dt><dd><kbd>Esc</kbd></dd></div></dl><p class="muted small">Single-key shortcuts pause while you’re typing. Use Tab to reach filters, task selection, and status controls.</p><div class="modal-actions"><button class="primary" data-action="modal-close">Got it</button></div>`,
+  );
+  $(".shortcut-list").insertAdjacentHTML(
+    "afterend",
+    `<label class="shortcut-preference" for="single-key-shortcuts"><input id="single-key-shortcuts" type="checkbox"${state.singleKeyShortcuts ? " checked" : ""}><span><strong>Enable single-key shortcuts</strong><small>Turn off N, /, and ? when using voice control or a screen reader. Ctrl / ⌘ K stays available.</small></span></label>`,
+  );
+}
+const commands = createCommandPalette({
+  dialog: commandDialog,
+  state,
+  api,
+  esc,
+  icon,
+  navigate,
+  createTask: () => taskForm(),
+  createProject: () => projectForm(),
+  createWorkspace: workspaceForm,
+  openTask,
+  applyView: applySavedView,
+  help: shortcutsDialog,
 });
 async function boot() {
   try {

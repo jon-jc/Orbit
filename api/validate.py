@@ -3,11 +3,11 @@
 from pathlib import Path
 
 import yaml
-from openapi_spec_validator import validate_spec
+from openapi_spec_validator import validate
 
 
 contract = yaml.safe_load(Path(__file__).with_name("openapi.yaml").read_text(encoding="utf-8"))
-validate_spec(contract)
+validate(contract)
 operation_ids = [
     operation["operationId"]
     for methods in contract["paths"].values()

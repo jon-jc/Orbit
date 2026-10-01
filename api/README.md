@@ -1,6 +1,6 @@
 # OpenAPI contract
 
-[openapi.yaml](openapi.yaml) is the checked-in OpenAPI 3.1 contract for Orbit's 34 paths and 45 operations. It covers authentication, account/session lifecycle, workspaces/settings/team/invitations, projects/tasks/comments/export, and notifications. Response records and normalized controller paths have been reviewed against the implementation. [API.md](../docs/API.md) explains behavior and [ACCOUNT_SECURITY.md](../docs/ACCOUNT_SECURITY.md) explains security and delivery operations.
+[openapi.yaml](openapi.yaml) is the checked-in OpenAPI 3.1 contract for Orbit 1.1.0's 37 paths and 51 operations. It covers authentication, account/session lifecycle, workspaces/settings/team/invitations, projects/tasks/comments/export, atomic bulk task updates, private saved views, and notifications. Response records and normalized controller paths have been reviewed against the implementation. [API.md](../docs/API.md) explains behavior and [ACCOUNT_SECURITY.md](../docs/ACCOUNT_SECURITY.md) explains security and delivery operations.
 
 The contract is a repository artifact; Orbit does not expose a Swagger UI or an automatically generated OpenAPI endpoint. Structural validation checks the specification and unique operation IDs. It does not execute HTTP calls or prove that code still matches an edited contract. Review endpoint/DTO/security changes together and run the Java/browser workflow checks.
 

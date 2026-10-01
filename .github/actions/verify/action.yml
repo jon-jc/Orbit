@@ -1,0 +1,163 @@
+name: Verify complete Orbit product
+description: Build once, verify backend/browser/recovery/production flows, and scan the tested runtime image.
+inputs:
+  release:
+    description: Preserve the exact image and executable for release promotion.
+    default: 'false'
+outputs:
+  image-id:
+    description: The exact local tested image config digest.
+    value: ${{ steps.runtime-image.outputs.image-id }}
+runs:
+  using: composite
+  steps:
+    - name: Verify release identity and integrity guard behavior
+      shell: bash
+      run: python3 scripts/release/test_validation.py
+    - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+      with:
+        distribution: temurin
+        java-version: '17'
+        cache: maven
+    - name: H2 and PostgreSQL tests with executable artifact
+      shell: bash
+      run: |
+        chmod +x mvnw
+        mkdir -p verification
+        ./mvnw -B -ntp -Ppostgres-tests verify
+    - name: Validate OpenAPI contract
+      shell: bash
+      run: |
+        python3 -m venv .openapi-venv
+        .openapi-venv/bin/pip install -r api/requirements-validation.txt
+        .openapi-venv/bin/python api/validate.py
+    - name: Verify isolated PostgreSQL backup and restore
+      shell: bash
+      run: |
+        sh -n scripts/backup.sh scripts/restore.sh scripts/test-recovery.sh
+        sh scripts/test-recovery.sh
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      with:
+        node-version: '24'
+        cache: npm
+    - name: Install browser tooling and check formatting
+      shell: bash
+      run: |
+        npm ci
+        npm run format:check
+        npx playwright install --with-deps chromium
+    - name: Start isolated browser-test mail sink
+      shell: bash
+      run: |
+        mail_key=$(openssl rand -base64 32)
+        echo "::add-mask::$mail_key"
+        echo "ORBIT_MAIL_ENCRYPTION_KEY=$mail_key" >> "$GITHUB_ENV"
+        docker run -d --name orbit-browser-mailpit \
+          -p 127.0.0.1:1025:1025 -p 127.0.0.1:8025:8025 axllent/mailpit:v1.31.3
+        for attempt in $(seq 1 30); do
+          if curl -fsS http://127.0.0.1:8025/api/v1/messages >/dev/null; then exit 0; fi
+          sleep 1
+        done
+        echo 'Mailpit did not become ready.' >&2
+        exit 1
+    - name: Browser workflow and mobile tests
+      shell: bash
+      run: npm run test:e2e -- --reporter=line,json --retries=0
+      env:
+        PLAYWRIGHT_JSON_OUTPUT_FILE: verification/browser-results.json
+        SPRING_APPLICATION_JSON: '{"orbit":{"auth":{"rate-limit-enabled":false}}}'
+        ORBIT_MAIL_ENABLED: 'true'
+        ORBIT_MAIL_HOST: 127.0.0.1
+        ORBIT_MAIL_PORT: '1025'
+        ORBIT_MAIL_STARTTLS: 'false'
+        ORBIT_MAIL_FROM: orbit@example.test
+        ORBIT_PUBLIC_BASE_URL: http://127.0.0.1:8080
+        ORBIT_MAILPIT_URL: http://127.0.0.1:8025
+    - name: Stop browser-test mail sink
+      if: always()
+      shell: bash
+      run: docker rm -f orbit-browser-mailpit 2>/dev/null || true
+    - name: Package the tested executable into the production image
+      id: runtime-image
+      shell: bash
+      run: |
+        mkdir -p verification/image-context
+        python3 scripts/release/prepare-image.py
+        docker build --pull -f Dockerfile.runtime \
+          --build-arg VERSION="$(cat verification/version.txt)" \
+          --build-arg REVISION="$(git rev-parse HEAD)" \
+          --build-arg SOURCE="https://github.com/$GITHUB_REPOSITORY" \
+          --build-arg CREATED="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          -t orbit:verified verification/image-context
+        image_id=$(docker image inspect --format '{{.Id}}' orbit:verified)
+        echo "image-id=$image_id" >> "$GITHUB_OUTPUT"
+        echo "$image_id" > verification/image-id.txt
+    - name: Generate runtime CycloneDX SBOM
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      with:
+        version: v0.74.0
+        image-ref: orbit:verified
+        scanners: vuln
+        format: cyclonedx
+        output: verification/runtime.sbom.json
+        exit-code: '0'
+    - name: Gate runtime OS and Java vulnerabilities
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      with:
+        version: v0.74.0
+        image-ref: orbit:verified
+        scanners: vuln
+        vuln-type: os,library
+        severity: HIGH,CRITICAL
+        ignore-unfixed: false
+        format: json
+        output: verification/runtime-vulnerabilities.json
+        exit-code: '1'
+        skip-setup-trivy: true
+    - name: Verify isolated production-profile behavior and container restrictions
+      shell: bash
+      run: python3 scripts/test-production.py orbit:verified verification/production-results.json
+    - name: Record passing verification totals
+      shell: bash
+      run: python3 scripts/release/summarize.py
+    - name: Preserve the exact tested release image
+      if: inputs.release == 'true'
+      shell: bash
+      run: docker save orbit:verified -o verification/runtime-image.tar
+    - name: Preserve tested release inputs
+      if: inputs.release == 'true'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: verified-release-inputs
+        compression-level: 0
+        retention-days: 2
+        if-no-files-found: error
+        path: |
+          verification/image-context/orbit.jar
+          verification/runtime-image.tar
+          verification/runtime.sbom.json
+          verification/runtime-vulnerabilities.json
+          verification/image-id.txt
+          verification/version.txt
+          verification/checks.json
+    - name: Preserve runtime security and verification reports
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: runtime-security-reports
+        retention-days: 14
+        path: |
+          verification/runtime.sbom.json
+          verification/runtime-vulnerabilities.json
+          verification/production-results.json
+          verification/checks.json
+    - name: Preserve test failure reports
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: test-reports
+        retention-days: 7
+        path: |
+          target/surefire-reports/
+          target/failsafe-reports/
+          test-results/

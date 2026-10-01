@@ -24,3 +24,5 @@ coverage/
 backups/
 *.dump
 .openapi-venv/
+dist/
+__pycache__/

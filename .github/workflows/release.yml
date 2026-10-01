@@ -1,0 +1,152 @@
+name: Release Orbit
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing exact stable tag (for example v1.1.0) at the current main tip
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: orbit-release
+  cancel-in-progress: false
+
+jobs:
+  identity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.identity.outputs.tag }}
+      version: ${{ steps.identity.outputs.version }}
+      commit: ${{ steps.identity.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate release identity from trusted main
+        id: identity
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo 'Dispatch the release workflow from main.' >&2
+            exit 1
+          fi
+          python3 scripts/release/validate.py --resolve "$RELEASE_TAG"
+
+  verify:
+    needs: identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.identity.outputs.commit }}
+          persist-credentials: false
+      - uses: ./.github/actions/verify
+        with:
+          release: 'true'
+
+  publish:
+    needs: [identity, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.identity.outputs.version }}
+      RELEASE_COMMIT: ${{ needs.identity.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.identity.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: verified-release-inputs
+          path: verification
+      - name: Recheck identity and refuse published release replacement
+        run: |
+          python3 scripts/release/validate.py "$RELEASE_TAG"
+          python3 scripts/release/check-release.py "$RELEASE_TAG"
+          image_repository=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE_REPOSITORY=$image_repository" >> "$GITHUB_ENV"
+          echo "IMAGE_NAME=ghcr.io/$image_repository" >> "$GITHUB_ENV"
+          python3 scripts/release/registry.py absent "$image_repository" "$RELEASE_VERSION" "sha-$RELEASE_COMMIT"
+      - name: Promote the exact tested image without rebuilding
+        id: image
+        run: |
+          docker load -i verification/runtime-image.tar
+          actual=$(docker image inspect --format '{{.Id}}' orbit:verified)
+          test "$actual" = "$(cat verification/image-id.txt)"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker tag orbit:verified "$IMAGE_NAME:$RELEASE_VERSION"
+          docker tag orbit:verified "$IMAGE_NAME:sha-$RELEASE_COMMIT"
+          docker push "$IMAGE_NAME:$RELEASE_VERSION"
+          docker push "$IMAGE_NAME:sha-$RELEASE_COMMIT"
+          digest=$(python3 scripts/release/registry.py digest "$IMAGE_REPOSITORY" "$RELEASE_VERSION" "sha-$RELEASE_COMMIT")
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
+      - name: Prepare source and versioned release assets
+        run: python3 scripts/release/assets.py
+      - name: Attest downloadable artifacts with OIDC build provenance
+        id: artifact-provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/*
+      - name: Attest the exact registry image with OIDC build provenance
+        id: image-provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+      - name: Attest the runtime SBOM for that image
+        id: sbom-provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          sbom-path: verification/runtime.sbom.json
+          push-to-registry: true
+          create-storage-record: false
+      - name: Include provenance bundles and final checksums
+        env:
+          ARTIFACT_BUNDLE: ${{ steps.artifact-provenance.outputs.bundle-path }}
+          IMAGE_BUNDLE: ${{ steps.image-provenance.outputs.bundle-path }}
+          SBOM_BUNDLE: ${{ steps.sbom-provenance.outputs.bundle-path }}
+        run: |
+          cp "$ARTIFACT_BUNDLE" "dist/orbit-$RELEASE_VERSION-artifacts.provenance.json"
+          cp "$IMAGE_BUNDLE" "dist/orbit-$RELEASE_VERSION-image.provenance.json"
+          cp "$SBOM_BUNDLE" "dist/orbit-$RELEASE_VERSION-sbom.provenance.json"
+          python3 scripts/release/checksums.py
+      - name: Publish a fully populated GitHub release
+        run: |
+          gh release create "$RELEASE_TAG" dist/* --draft --verify-tag \
+            --title "Orbit $RELEASE_VERSION" --notes-file verification/release-notes.md
+          gh release edit "$RELEASE_TAG" --draft=false --latest
+          {
+            echo "## Orbit $RELEASE_VERSION"
+            echo "Commit: \`$RELEASE_COMMIT\`"
+            echo "Image: \`$IMAGE_NAME@$IMAGE_DIGEST\`"
+            echo "[Release assets](https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG)"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Log out of registry
+        if: always()
+        run: docker logout ghcr.io

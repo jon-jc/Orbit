@@ -1,0 +1,4 @@
+# Use with compose.yaml and --no-build to consume a verified published digest.
+services:
+  app:
+    image: ${ORBIT_IMAGE:?Set ORBIT_IMAGE to the verified GHCR image digest}

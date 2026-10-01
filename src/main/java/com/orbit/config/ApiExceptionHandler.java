@@ -18,6 +18,8 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.ErrorResponse;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
@@ -47,11 +49,12 @@ public class ApiExceptionHandler {
                 return ResponseEntity.status(413).body(problem(HttpStatus.PAYLOAD_TOO_LARGE,"Request body must not exceed 64 KiB.",request));
         return ResponseEntity.badRequest().body(problem(HttpStatus.BAD_REQUEST,"The request contains invalid or missing values.",request));
     }
-    @ExceptionHandler({NoResourceFoundException.class,HttpRequestMethodNotSupportedException.class,MissingServletRequestParameterException.class})
+    @ExceptionHandler({NoResourceFoundException.class,HttpRequestMethodNotSupportedException.class,MissingServletRequestParameterException.class,
+            HttpMediaTypeNotAcceptableException.class,HttpMediaTypeNotSupportedException.class})
     ResponseEntity<ProblemDetail> framework(Exception ex,HttpServletRequest request) {
         var error=(ErrorResponse)ex;
         var status=HttpStatus.valueOf(error.getStatusCode().value());
-        return ResponseEntity.status(status).body(problem(status,status.getReasonPhrase(),request));
+        return ResponseEntity.status(status).headers(error.getHeaders()).body(problem(status,status.getReasonPhrase(),request));
     }
     @ExceptionHandler(AuthenticationException.class)
     ResponseEntity<ProblemDetail> authentication(AuthenticationException ex,HttpServletRequest request) {

@@ -22,7 +22,7 @@ flowchart LR
 
 `com.orbit.config` owns filter chains, CSRF, security headers, request IDs, error translation, and the bounded authentication rate limiter. Infrastructure does not authorize workspace resources: the domain checks membership and roles on each request.
 
-`com.orbit.domain` owns versioned workspace settings, membership/invitations, projects, tasks, comments, notification audiences, activity, overview aggregation, and export. Controllers deserialize validated records and pass the authenticated user ID to the service. The service uses parameterized JDBC queries and explicit response records. Static assets use this same-origin API; there is no separate frontend deployment or CORS dependency.
+`com.orbit.domain` owns versioned workspace settings, membership/invitations, projects, tasks/bulk updates, private saved views, comments, notification audiences, activity, overview aggregation, and export. Controllers deserialize validated records and pass the authenticated user ID to the service. The service uses parameterized JDBC queries and explicit response records. Static assets use this same-origin API; there is no separate frontend deployment or CORS dependency.
 
 `com.orbit.mail` stores encrypted message intent in the same database transaction as the associated action. Its dispatcher claims due rows with leases and delivers via JavaMail outside the claim transaction. AES-256-GCM protects bodies/action links, using authenticated message metadata. Recipient/subject metadata remain plaintext. SMTP delivery is at least once, with bounded retries; no exactly-once promise is made.
 
@@ -44,17 +44,21 @@ erDiagram
     WORKSPACE ||--o{ WORKSPACE_INVITATION : invites
     APP_USER ||--o{ USER_NOTIFICATION : receives
     WORKSPACE ||--o{ USER_NOTIFICATION : scopes
+    APP_USER ||--o{ SAVED_TASK_VIEW : owns
+    WORKSPACE ||--o{ SAVED_TASK_VIEW : scopes
 ```
 
 All application IDs are UUID strings. Timestamps retain timezone information; deadlines are calendar dates. Membership uses a `(workspace_id, user_id)` primary key. Task references use composite workspace/project and workspace/assignee foreign keys, which reject references crossing workspaces even if an application guard fails. Comments similarly reference a task within the same workspace.
 
-An OWNER manages membership, invitations, and settings. OWNER and MEMBER edit projects/tasks and add comments. VIEWER can read and export. Workspace creation grants OWNER to the creator. Owners cannot demote themselves or delete an owner membership. Removing a member clears their task assignments and increments those task versions before deleting membership. Existing comments and activity retain their author identity.
+An OWNER manages membership, invitations, and settings. OWNER and MEMBER edit projects/tasks and add comments. VIEWER can read/export shared work and maintain their own private saved views. Workspace creation grants OWNER to the creator. Owners cannot demote themselves or delete an owner membership. Removing a member clears their task assignments and increments those task versions before deleting membership. Their private views are removed; references to that assignee in other members' views are cleared with version increments. Existing comments and activity retain their author identity.
 
 The domain checks resource IDs within the requested workspace and checks actor membership first. A nonexistent workspace or a workspace inaccessible to the actor returns 404. A member who lacks an action's role gets 403. The service never trusts a frontend role or supplied actor ID.
 
 ## Consistency and concurrent changes
 
 Mutation methods are transactional. The main write, associated notifications/activity, and mail intent either commit or roll back together. The browser receives a task/project/workspace-settings version. Scoped updates compare and increment that version. Zero affected rows after a valid lookup produce 409. Task deletion also requires a version. A stale editor must reload and apply their change against the current object.
+
+Bulk updates validate 1–100 distinct scoped task IDs and the exact supplied version map before committing any changes. A scoped missing record or stale version rolls back the entire batch, including audit and notifications. The service returns records in request order. Private saved views are scoped by workspace and owning user; current membership remains required, and an owner role does not expose another user's view. Updates replace the complete filter set with optimistic version protection. V6 adds this persistence without rewriting earlier migrations.
 
 Account-row locks serialize issuance and consumption of purpose-bound reset/verification tokens. A per-account/purpose cooldown preserves a usable link under repeated anonymous requests. SHA-256 hashes of 256-bit secrets are stored in token tables. Invitation acceptance locks the workspace, rechecks the inviter's ownership and target email, and consumes the token once. Reissuing an invitation revokes older unaccepted links for that workspace/email; it cannot silently replace an existing member's role.
 
@@ -76,6 +80,8 @@ The production profile requires database credentials and disables demo initializ
 
 The management HTTP server binds to loopback on port 9091. Health details are hidden and metrics remain within that network boundary. The application has graceful shutdown; orchestration should stop sending traffic before ending its process. Compose is a single-host reference deployment with persistent PostgreSQL storage, not high availability or automated disaster recovery.
 
-The image build uses a checksum-pinned Maven distribution and updates runtime OS packages. CI actions use immutable verified release commits with version comments for Dependabot. CI validates OpenAPI, exercises real database/browser/recovery workflows, emits a CycloneDX inventory, and gates selected HIGH/CRITICAL OS and packaged Java vulnerabilities with Trivy. PR dependency review covers new runtime/development dependencies; optional OWASP adds another source with an NVD key. Trivy prefers distro/vendor severity; lower-severity CVEs and alternate-source ratings remain in the full inventory. Scans describe known findings at a point in time, not application exploitability or unknown vulnerabilities.
+The image build uses a checksum-pinned Maven distribution and updates runtime OS packages. CI actions use immutable verified release commits with version comments for Dependabot. Shared verification runs both database suites once, validates OpenAPI, exercises real browser/recovery/production workflows, emits a CycloneDX inventory, and gates selected HIGH/CRITICAL OS and packaged Java vulnerabilities with Trivy. PR dependency review covers new runtime/development dependencies; optional OWASP adds another source only with an NVD key. Trivy prefers distro/vendor severity; lower-severity CVEs and alternate-source ratings remain in the full inventory. Scans describe known findings at a point in time, not application exploitability or unknown vulnerabilities.
+
+Version releases repeat these gates against an exact POM-matching source commit, then promote the tested runtime image without rebuilding. The manifest links source commit, image config/registry digests, test totals, inventory/report, and downloadable hashes. GitHub OIDC provenance is generated only when the triggering workflow SHA equals that source commit. [RELEASE.md](RELEASE.md) describes tag policy, package visibility, attestation verification, and deployment limits.
 
 For a stricter environment, separate migration and runtime database privileges, use managed PostgreSQL with point-in-time recovery, pin container/action digests, add SSO/MFA and shared signup controls, define retention, and perform an independent security assessment. These are environment or product extensions, not features implied by the current code. [Backup tools](../scripts/README.md) restore into new isolated read-only recovery resources; they do not promote production or configure off-host backup storage.

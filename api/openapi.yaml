@@ -1,12 +1,14 @@
 openapi: 3.1.0
 info:
   title: Orbit API
-  version: 1.0.0
+  version: 1.1.0
   description: Same-origin, session-authenticated project workspace. Mutations require CSRF, including
     public authentication operations. Required text is nonblank, domain/display-name text rejects U+0000,
     API payloads are capped at 64 KiB. Owners manage team/settings/invitations; owners/members edit projects/tasks
     and add comments; viewers read/export. IDs are scoped to membership; inaccessible workspaces return
-    404.
+    404. Private saved views belong to their creating member, including viewers. Bulk task mutations are
+    atomic and require every current task version. Unsupported request media returns 415, unacceptable
+    response media returns 406, and unsupported methods return 405 with Allow.
 servers:
 - url: /
 tags:
@@ -19,6 +21,7 @@ tags:
 - name: Activity
 - name: Invitations
 - name: Notifications
+- name: Saved views
 paths:
   /api/auth/csrf:
     get:
@@ -40,6 +43,8 @@ paths:
           $ref: '#/components/responses/Problem403'
         '500':
           $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
   /api/auth/config:
     get:
       operationId: getAuthConfig
@@ -60,6 +65,8 @@ paths:
           $ref: '#/components/responses/Problem403'
         '500':
           $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
   /api/auth/me:
     get:
       operationId: getCurrentUser
@@ -85,6 +92,8 @@ paths:
           $ref: '#/components/responses/Problem404'
         '500':
           $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
   /api/auth/register:
     post:
       operationId: registerAccount
@@ -113,6 +122,10 @@ paths:
           $ref: '#/components/responses/Problem429'
         '500':
           $ref: '#/components/responses/Problem500'
+        '415':
+          $ref: '#/components/responses/Problem415'
+        '406':
+          $ref: '#/components/responses/Problem406'
       description: Public operation requires the anonymous session cookie and CSRF token issued by GET
         /api/auth/csrf; no authenticated account is required.
       requestBody:
@@ -151,6 +164,10 @@ paths:
           $ref: '#/components/responses/Problem500'
         '401':
           $ref: '#/components/responses/Problem401'
+        '415':
+          $ref: '#/components/responses/Problem415'
+        '406':
+          $ref: '#/components/responses/Problem406'
       description: Public operation requires the anonymous session cookie and CSRF token issued by GET
         /api/auth/csrf; no authenticated account is required.
       requestBody:
@@ -215,6 +232,10 @@ paths:
           $ref: '#/components/responses/Problem429'
         '500':
           $ref: '#/components/responses/Problem500'
+        '415':
+          $ref: '#/components/responses/Problem415'
+        '406':
+          $ref: '#/components/responses/Problem406'
       description: 'Generic accepted response avoids disclosing whether an account exists. Reset tokens
         expire after 30 minutes by default; the TTL is configurable.
 
@@ -251,6 +272,8 @@ paths:
           $ref: '#/components/responses/Problem429'
         '500':
           $ref: '#/components/responses/Problem500'
+        '415':
+          $ref: '#/components/responses/Problem415'
       description: Public operation requires the anonymous session cookie and CSRF token issued by GET
         /api/auth/csrf; no authenticated account is required.
       requestBody:
@@ -283,6 +306,8 @@ paths:
           $ref: '#/components/responses/Problem429'
         '500':
           $ref: '#/components/responses/Problem500'
+        '415':
+          $ref: '#/components/responses/Problem415'
       description: Public operation requires the anonymous session cookie and CSRF token issued by GET
         /api/auth/csrf; no authenticated account is required.
       requestBody:
@@ -319,6 +344,10 @@ paths:
           $ref: '#/components/responses/Problem429'
         '500':
           $ref: '#/components/responses/Problem500'
+        '415':
+          $ref: '#/components/responses/Problem415'
+        '406':
+          $ref: '#/components/responses/Problem406'
       description: Public operation requires the anonymous session cookie and CSRF token issued by GET
         /api/auth/csrf; no authenticated account is required.
       requestBody:
@@ -352,6 +381,8 @@ paths:
           $ref: '#/components/responses/Problem404'
         '500':
           $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
     patch:
       operationId: updateAccount
       tags:
@@ -381,6 +412,10 @@ paths:
           $ref: '#/components/responses/Problem413'
         '500':
           $ref: '#/components/responses/Problem500'
+        '415':
+          $ref: '#/components/responses/Problem415'
+        '406':
+          $ref: '#/components/responses/Problem406'
       requestBody:
         required: true
         content:
@@ -415,6 +450,8 @@ paths:
           $ref: '#/components/responses/Problem429'
         '500':
           $ref: '#/components/responses/Problem500'
+        '415':
+          $ref: '#/components/responses/Problem415'
       requestBody:
         required: true
         content:
@@ -453,6 +490,8 @@ paths:
           $ref: '#/components/responses/Problem429'
         '500':
           $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
   /api/account/sessions:
     get:
       operationId: listAccountSessions
@@ -480,6 +519,8 @@ paths:
           $ref: '#/components/responses/Problem404'
         '500':
           $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
       description: The opaque row id is a revocation identifier, never the cookie/session credential.
   /api/account/sessions/{sessionId}:
     delete:
@@ -543,6 +584,8 @@ paths:
           $ref: '#/components/responses/Problem404'
         '500':
           $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
     post:
       operationId: createWorkspace
       tags:
@@ -572,6 +615,10 @@ paths:
           $ref: '#/components/responses/Problem413'
         '500':
           $ref: '#/components/responses/Problem500'
+        '415':
+          $ref: '#/components/responses/Problem415'
+        '406':
+          $ref: '#/components/responses/Problem406'
       requestBody:
         required: true
         content:
@@ -603,6 +650,8 @@ paths:
           $ref: '#/components/responses/Problem404'
         '500':
           $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters: &id001
       - &id002
         name: workspaceId
@@ -640,6 +689,10 @@ paths:
           $ref: '#/components/responses/Problem413'
         '500':
           $ref: '#/components/responses/Problem500'
+        '415':
+          $ref: '#/components/responses/Problem415'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters: *id001
       requestBody:
         required: true
@@ -674,6 +727,8 @@ paths:
           $ref: '#/components/responses/Problem404'
         '500':
           $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters: *id001
     post:
       operationId: addMember
@@ -704,6 +759,10 @@ paths:
           $ref: '#/components/responses/Problem413'
         '500':
           $ref: '#/components/responses/Problem500'
+        '415':
+          $ref: '#/components/responses/Problem415'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters: *id001
       requestBody:
         required: true
@@ -741,6 +800,10 @@ paths:
           $ref: '#/components/responses/Problem413'
         '500':
           $ref: '#/components/responses/Problem500'
+        '415':
+          $ref: '#/components/responses/Problem415'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters:
       - *id002
       - name: userId
@@ -815,6 +878,8 @@ paths:
           $ref: '#/components/responses/Problem404'
         '500':
           $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters: *id001
     post:
       operationId: createProject
@@ -845,6 +910,10 @@ paths:
           $ref: '#/components/responses/Problem413'
         '500':
           $ref: '#/components/responses/Problem500'
+        '415':
+          $ref: '#/components/responses/Problem415'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters: *id001
       requestBody:
         required: true
@@ -882,6 +951,10 @@ paths:
           $ref: '#/components/responses/Problem413'
         '500':
           $ref: '#/components/responses/Problem500'
+        '415':
+          $ref: '#/components/responses/Problem415'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters:
       - *id002
       - name: projectId
@@ -921,6 +994,8 @@ paths:
           $ref: '#/components/responses/Problem404'
         '500':
           $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters:
       - *id002
       - name: q
@@ -933,7 +1008,7 @@ paths:
       - name: status
         in: query
         required: false
-        schema: &id013
+        schema: &id015
           type: string
           enum:
           - BACKLOG
@@ -944,7 +1019,7 @@ paths:
       - name: priority
         in: query
         required: false
-        schema: &id014
+        schema: &id016
           type: string
           enum:
           - LOW
@@ -1007,6 +1082,10 @@ paths:
           $ref: '#/components/responses/Problem413'
         '500':
           $ref: '#/components/responses/Problem500'
+        '415':
+          $ref: '#/components/responses/Problem415'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters: *id001
       requestBody:
         required: true
@@ -1039,6 +1118,8 @@ paths:
           $ref: '#/components/responses/Problem404'
         '500':
           $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters: &id003
       - *id002
       - &id004
@@ -1077,6 +1158,10 @@ paths:
           $ref: '#/components/responses/Problem413'
         '500':
           $ref: '#/components/responses/Problem500'
+        '415':
+          $ref: '#/components/responses/Problem415'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters: *id003
       description: A stale version returns 409; fetch current state before reconciling changes.
       requestBody:
@@ -1147,6 +1232,8 @@ paths:
           $ref: '#/components/responses/Problem404'
         '500':
           $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters: *id003
     post:
       operationId: createComment
@@ -1177,6 +1264,10 @@ paths:
           $ref: '#/components/responses/Problem413'
         '500':
           $ref: '#/components/responses/Problem500'
+        '415':
+          $ref: '#/components/responses/Problem415'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters: *id003
       requestBody:
         required: true
@@ -1209,6 +1300,8 @@ paths:
           $ref: '#/components/responses/Problem404'
         '500':
           $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters:
       - *id002
       - name: page
@@ -1251,6 +1344,8 @@ paths:
           $ref: '#/components/responses/Problem404'
         '500':
           $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters: *id001
   /api/workspaces/{workspaceId}/export:
     get:
@@ -1283,6 +1378,8 @@ paths:
           $ref: '#/components/responses/Problem404'
         '500':
           $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters: *id001
   /api/workspaces/{workspaceId}/invitations:
     get:
@@ -1311,6 +1408,8 @@ paths:
           $ref: '#/components/responses/Problem404'
         '500':
           $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters: *id001
     post:
       operationId: createInvitation
@@ -1345,6 +1444,10 @@ paths:
           $ref: '#/components/responses/Problem429'
         '503':
           $ref: '#/components/responses/Problem503'
+        '415':
+          $ref: '#/components/responses/Problem415'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters: *id001
       description: Single-use 256-bit token is stored hashed and expires in seven days; delivery uses
         the durable mail outbox. Requires enabled mail (503 otherwise). Maximum 100 invitations per owner
@@ -1411,11 +1514,13 @@ paths:
           $ref: '#/components/responses/Problem500'
         '404':
           $ref: '#/components/responses/Problem404'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters:
       - name: token
         in: query
         required: true
-        schema: &id005
+        schema: &id007
           type: string
           pattern: ^[A-Za-z0-9_-]{43}$
           description: Opaque single-use token from an email link.
@@ -1452,6 +1557,10 @@ paths:
           $ref: '#/components/responses/Problem413'
         '500':
           $ref: '#/components/responses/Problem500'
+        '415':
+          $ref: '#/components/responses/Problem415'
+        '406':
+          $ref: '#/components/responses/Problem406'
       requestBody:
         required: true
         content:
@@ -1483,6 +1592,8 @@ paths:
           $ref: '#/components/responses/Problem404'
         '500':
           $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
       parameters:
       - name: page
         in: query
@@ -1558,6 +1669,234 @@ paths:
           $ref: '#/components/responses/Problem409'
         '413':
           $ref: '#/components/responses/Problem413'
+        '500':
+          $ref: '#/components/responses/Problem500'
+  /api/workspaces/{workspaceId}/tasks/bulk:
+    post:
+      operationId: bulkUpdateTasks
+      tags:
+      - Tasks
+      summary: 'Owner/member: atomically update selected tasks'
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      parameters:
+      - &id005
+        name: workspaceId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '415':
+          $ref: '#/components/responses/Problem415'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkTasks'
+  /api/workspaces/{workspaceId}/saved-views:
+    get:
+      operationId: listSavedViews
+      tags:
+      - Saved views
+      summary: List the current member’s private saved views
+      security:
+      - sessionCookie: []
+      parameters:
+      - *id005
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SavedView'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
+      description: Returns at most 100 views owned by this member in this workspace; no paging.
+    post:
+      operationId: createSavedView
+      tags:
+      - Saved views
+      summary: Create a private saved view
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      parameters:
+      - *id005
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SavedView'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '415':
+          $ref: '#/components/responses/Problem415'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
+      description: Any current member, including VIEWER, may create their own view. At most 100 per user/workspace;
+        exceeding that limit returns 409. Referenced projects/assignees must belong to the workspace.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSavedView'
+  /api/workspaces/{workspaceId}/saved-views/{viewId}:
+    get:
+      operationId: getSavedView
+      tags:
+      - Saved views
+      summary: Read an owned private saved view
+      security:
+      - sessionCookie: []
+      parameters:
+      - *id005
+      - &id006
+        name: viewId
+        in: path
+        required: true
+        schema: &id022
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SavedView'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
+      description: Other members’ view IDs return 404, including to workspace owners.
+    patch:
+      operationId: updateSavedView
+      tags:
+      - Saved views
+      summary: Replace owned private view filters with optimistic version
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      parameters:
+      - *id005
+      - *id006
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SavedView'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '415':
+          $ref: '#/components/responses/Problem415'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '406':
+          $ref: '#/components/responses/Problem406'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSavedView'
+    delete:
+      operationId: deleteSavedView
+      tags:
+      - Saved views
+      summary: Delete an owned private saved view
+      security:
+      - sessionCookie: []
+        csrfToken: []
+      parameters:
+      - *id005
+      - *id006
+      responses:
+        '204':
+          description: No content
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
         '500':
           $ref: '#/components/responses/Problem500'
 components:
@@ -1698,13 +2037,13 @@ components:
     TokenRequest:
       type: object
       properties:
-        token: *id005
+        token: *id007
       required:
       - token
     ResetPassword:
       type: object
       properties:
-        token: *id005
+        token: *id007
         password:
           type: string
           minLength: 12
@@ -1740,19 +2079,19 @@ components:
     Workspace:
       type: object
       properties:
-        id: &id006
+        id: &id008
           type: string
           format: uuid
-        name: &id007
+        name: &id009
           type: string
           maxLength: 100
-        role: &id008
+        role: &id010
           type: string
           enum:
           - OWNER
           - MEMBER
           - VIEWER
-        createdAt: &id009
+        createdAt: &id011
           type: string
           format: date-time
       required:
@@ -1763,10 +2102,10 @@ components:
     WorkspaceSettings:
       type: object
       properties:
-        id: *id006
-        name: *id007
-        role: *id008
-        createdAt: *id009
+        id: *id008
+        name: *id009
+        role: *id010
+        createdAt: *id011
         version:
           type: integer
           format: int64
@@ -1898,16 +2237,16 @@ components:
     CreateProject:
       type: object
       properties:
-        name: &id010
+        name: &id012
           type: string
           minLength: 1
           maxLength: 120
-        description: &id011
+        description: &id013
           type:
           - string
           - 'null'
           maxLength: 2000
-        color: &id012
+        color: &id014
           type: string
           pattern: ^#[0-9a-fA-F]{6}$
       required:
@@ -1916,9 +2255,9 @@ components:
     UpdateProject:
       type: object
       properties:
-        name: *id010
-        description: *id011
-        color: *id012
+        name: *id012
+        description: *id013
+        color: *id014
         status:
           type: string
           enum:
@@ -1936,26 +2275,26 @@ components:
     CreateTask:
       type: object
       properties:
-        title: &id015
+        title: &id017
           type: string
           minLength: 1
           maxLength: 200
-        description: &id016
+        description: &id018
           type:
           - string
           - 'null'
           maxLength: 10000
-        projectId: &id017
+        projectId: &id019
           type: string
           format: uuid
-        status: *id013
-        priority: *id014
-        assigneeId: &id018
+        status: *id015
+        priority: *id016
+        assigneeId: &id020
           type:
           - string
           - 'null'
           format: uuid
-        dueDate: &id019
+        dueDate: &id021
           type:
           - string
           - 'null'
@@ -1969,13 +2308,13 @@ components:
     UpdateTask:
       type: object
       properties:
-        title: *id015
-        description: *id016
-        projectId: *id017
-        status: *id013
-        priority: *id014
-        assigneeId: *id018
-        dueDate: *id019
+        title: *id017
+        description: *id018
+        projectId: *id019
+        status: *id015
+        priority: *id016
+        assigneeId: *id020
+        dueDate: *id021
         version:
           type: integer
           format: int64
@@ -1992,15 +2331,15 @@ components:
         id:
           type: string
           format: uuid
-        title: *id015
+        title: *id017
         description:
           type: string
           maxLength: 10000
-        projectId: *id017
-        status: *id013
-        priority: *id014
-        assigneeId: *id018
-        dueDate: *id019
+        projectId: *id019
+        status: *id015
+        priority: *id016
+        assigneeId: *id020
+        dueDate: *id021
         projectName:
           type: string
           maxLength: 120
@@ -2380,6 +2719,168 @@ components:
       - title
       - detail
       - requestId
+    BulkTasks:
+      type: object
+      description: Atomically update 1–100 distinct workspace tasks. versions must contain exactly every
+        requested task ID/current version. At least one nonnull status, priority, assigneeId, or clearAssignee=true
+        is required. A scoped missing ID returns 404 and a stale version returns 409; either leaves all
+        tasks, audit and notifications unchanged. Returns tasks in request order.
+      properties:
+        taskIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items: *id022
+        versions:
+          type: object
+          minProperties: 1
+          maxProperties: 100
+          propertyNames: *id022
+          additionalProperties: &id028
+            type: integer
+            format: int64
+            minimum: 0
+        status: &id023
+          type:
+          - string
+          - 'null'
+          enum:
+          - BACKLOG
+          - TODO
+          - IN_PROGRESS
+          - IN_REVIEW
+          - DONE
+          - null
+        priority: &id024
+          type:
+          - string
+          - 'null'
+          enum:
+          - LOW
+          - MEDIUM
+          - HIGH
+          - URGENT
+          - null
+        assigneeId: &id025
+          type:
+          - string
+          - 'null'
+          format: uuid
+        clearAssignee:
+          type:
+          - boolean
+          - 'null'
+          description: true clears assignment; cannot accompany a nonnull assigneeId.
+      required:
+      - taskIds
+      - versions
+      anyOf:
+      - required:
+        - status
+        properties:
+          status:
+            type: string
+            enum:
+            - BACKLOG
+            - TODO
+            - IN_PROGRESS
+            - IN_REVIEW
+            - DONE
+      - required:
+        - priority
+        properties:
+          priority:
+            type: string
+            enum:
+            - LOW
+            - MEDIUM
+            - HIGH
+            - URGENT
+      - required:
+        - assigneeId
+        properties:
+          assigneeId: *id022
+      - required:
+        - clearAssignee
+        properties:
+          clearAssignee:
+            const: true
+      not:
+        required:
+        - assigneeId
+        - clearAssignee
+        properties:
+          assigneeId: *id022
+          clearAssignee:
+            const: true
+    CreateSavedView:
+      type: object
+      properties:
+        label: &id026
+          type: string
+          minLength: 1
+          maxLength: 80
+          pattern: ^[^\x00]*$
+          description: Nonblank; leading/trailing whitespace is removed.
+        q: &id027
+          type:
+          - string
+          - 'null'
+          maxLength: 200
+          pattern: ^[^\x00]*$
+          description: Literal search text; whitespace is preserved. Empty string becomes null.
+        status: *id023
+        priority: *id024
+        projectId: *id025
+        assigneeId: *id025
+      required:
+      - label
+    UpdateSavedView:
+      type: object
+      description: Replaces the full label/filter set; omitted or null filter fields clear those filters.
+        Supply the current version.
+      properties:
+        label: *id026
+        q: *id027
+        status: *id023
+        priority: *id024
+        projectId: *id025
+        assigneeId: *id025
+        version: *id028
+      required:
+      - label
+      - version
+    SavedView:
+      type: object
+      properties:
+        id: *id022
+        workspaceId: *id022
+        label: *id026
+        q: *id027
+        status: *id023
+        priority: *id024
+        projectId: *id025
+        assigneeId: *id025
+        version: *id028
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - workspaceId
+      - label
+      - q
+      - status
+      - priority
+      - projectId
+      - assigneeId
+      - version
+      - createdAt
+      - updatedAt
   responses:
     Problem400:
       description: Invalid request
@@ -2436,6 +2937,29 @@ components:
             $ref: '#/components/schemas/Problem'
     Problem503:
       description: Email delivery is disabled for invitation creation
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Problem405:
+      description: Unsupported HTTP method; Allow lists supported methods
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+      headers:
+        Allow:
+          schema:
+            type: string
+          description: Comma-separated supported HTTP methods.
+    Problem406:
+      description: Requested response media type is not acceptable
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Problem415:
+      description: Unsupported request Content-Type; JSON request bodies require application/json
       content:
         application/problem+json:
           schema:

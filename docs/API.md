@@ -1,6 +1,6 @@
 # HTTP API
 
-All endpoints are same-origin. Requests and responses use JSON unless export returns CSV. IDs are UUID strings; deadlines use `YYYY-MM-DD`; timestamps are ISO 8601. The machine-readable [OpenAPI 3.1 contract](../api/openapi.yaml) covers 45 operations and can be validated with [api/validate.py](../api/validate.py). It is a checked-in contract, not an automatically generated runtime documentation endpoint.
+All endpoints are same-origin. Requests and responses use JSON unless export returns CSV. JSON bodies require `Content-Type: application/json`; unsupported request media returns 415, unacceptable response media returns 406, and unsupported methods return 405 with an `Allow` header. IDs are UUID strings; deadlines use `YYYY-MM-DD`; timestamps are ISO 8601. The machine-readable [OpenAPI 3.1 contract](../api/openapi.yaml) covers 51 operations and can be validated with [api/validate.py](../api/validate.py). It is a checked-in contract, not an automatically generated runtime documentation endpoint.
 
 ## Session protocol
 
@@ -60,11 +60,17 @@ Prefix workspace routes with `/api/workspaces/{workspaceId}`.
 | `PATCH /projects/{projectId}` | Edit `{name,description,color,status,version}` | OWNER or MEMBER |
 | `GET /tasks` | Search/filter/page tasks | Member of workspace |
 | `POST /tasks` | Create a task | OWNER or MEMBER |
+| `POST /tasks/bulk` | Atomically change status, priority, assignment of 1–100 versioned tasks | OWNER or MEMBER |
 | `GET /tasks/{taskId}` | Task details | Member of workspace |
 | `PATCH /tasks/{taskId}` | Replace editable task fields with `version` | OWNER or MEMBER |
 | `DELETE /tasks/{taskId}?version=N` | Delete current task version | OWNER or MEMBER |
 | `GET /tasks/{taskId}/comments` | Task comments | Member of workspace |
 | `POST /tasks/{taskId}/comments` | Add `{body}` | OWNER or MEMBER |
+| `GET /saved-views` | List up to 100 actor-owned private views | Any member, including VIEWER |
+| `POST /saved-views` | Save label and filters, 201 | Any member, including VIEWER |
+| `GET /saved-views/{viewId}` | Read own saved view | View owner with current membership |
+| `PATCH /saved-views/{viewId}` | Replace own label/filters using current version | View owner with current membership |
+| `DELETE /saved-views/{viewId}` | Delete own saved view, 204 | View owner with current membership |
 | `GET /activity` | Page activity events | Member of workspace |
 | `GET /overview` | Summary counts, projects, upcoming tasks, activity | Member of workspace |
 | `GET /export` | Download workspace tasks as formula-safe CSV | Member of workspace |
@@ -92,6 +98,7 @@ Task create/edit fields are `title`, `description`, `projectId`, `status`, `prio
 | Member | `id`, `name`, `email`, `role` |
 | Project | `id`, `name`, `description`, `color`, `status`, `taskCount`, `completedTaskCount`, `createdAt`, `version` |
 | Task | `id`, `title`, `description`, `projectId`, `projectName`, `projectColor`, `status`, `priority`, `assigneeId`, `assigneeName`, `dueDate`, `createdAt`, `updatedAt`, `version`, `commentCount` |
+| Saved view | `id`, `workspaceId`, `label`, `q`, `status`, `priority`, `projectId`, `assigneeId`, `version`, `createdAt`, `updatedAt` |
 | Comment | `id`, `authorId`, `authorName`, `body`, `createdAt` |
 | Activity | `id`, `actorName`, `action`, `entityType`, `entityName`, `createdAt` |
 | Overview | `totalTasks`, `completedTasks`, `inProgressTasks`, `overdueTasks`, `projects`, `recentActivity`, `upcomingTasks` |
@@ -111,6 +118,7 @@ Project color is a six-digit hexadecimal value including `#`, such as `#7367f0`.
 | Project name / description | 120 / 2,000 characters |
 | Task title / description | 200 / 10,000 characters |
 | Comment body | 4,000 characters |
+| Saved-view label / literal search | 80 / 200 characters |
 
 Creating a task:
 
@@ -127,6 +135,39 @@ Creating a task:
 ```
 
 The server supplies IDs, names, timestamps, counts, and the initial version. Send the complete editable object with that version to PATCH. Create endpoints return 201; successful edits return 200; deletion/logout/password replacement/token consumption return 204. Mail-request endpoints return 202 with `{message}`. Invitation acceptance returns 200 with the workspace.
+
+## Atomic bulk tasks and private views
+
+Bulk mutation accepts 1–100 distinct task IDs and a `versions` object containing exactly those IDs and their nonnegative current versions:
+
+```json
+{
+  "taskIds": ["d7c5ac86-fbbb-414b-9e25-c2b8dbfa5716"],
+  "versions": {"d7c5ac86-fbbb-414b-9e25-c2b8dbfa5716": 3},
+  "status": "IN_PROGRESS",
+  "priority": "HIGH",
+  "clearAssignee": true
+}
+```
+
+Provide at least one nonnull `status`, `priority`, `assigneeId`, or `clearAssignee:true`. A nonnull assignee and `clearAssignee:true` conflict and return 400. IDs and referenced assignees must belong to the workspace. The response is a task array in request order with incremented versions. A missing/inaccessible ID produces 404, or any stale version produces 409, with **no changes to any selected task, audit, or notifications**. Refresh all selected records and reconcile before retrying; never assume a partially successful batch.
+
+A saved view stores only its creator's label and task filters:
+
+```json
+{
+  "label": "My urgent reviews",
+  "q": "launch",
+  "status": "IN_REVIEW",
+  "priority": "URGENT",
+  "projectId": null,
+  "assigneeId": "d7c5ac86-fbbb-414b-9e25-c2b8dbfa5716"
+}
+```
+
+Any current member, including VIEWER, can maintain their own views. Other members' view IDs return 404, even to workspace owners. The limit is 100 per user/workspace; exceeding it returns 409. Labels are nonblank and trimmed; search text preserves literal whitespace, with an empty string stored as null. The response always includes all filter keys, which may be null, plus workspace/ID/timestamps/version. PATCH requires `version` and replaces the full filter set: an omitted or null filter clears it. Referenced projects/assignees must remain within the workspace.
+
+Removing a member deletes their private views and clears that assignee from remaining members' views while incrementing affected view versions. A previously open editor must reconcile the resulting 409. Filter URLs and view IDs grant no access by themselves.
 
 ## Accounts, tokens, and invitations
 
@@ -158,8 +199,11 @@ Tasks accept `q`, `status`, `priority`, `projectId`, `assigneeId`, `page`, and `
 | 401 | Sign-in required or invalid credentials |
 | 403 | Insufficient role, verification/registration policy, email mismatch, or missing/invalid CSRF token |
 | 404 | Object absent or workspace not accessible to this user |
+| 405 | Unsupported HTTP method; `Allow` lists supported methods |
+| 406 | Requested response media type is not acceptable |
 | 409 | Duplicate/conflicting state or stale optimistic version |
 | 413 | API request body exceeds the 64 KiB limit |
+| 415 | Unsupported request media type; JSON bodies require `application/json` |
 | 429 | Authentication limit (with `Retry-After`) or daily invitation limit |
 | 500 | Unexpected failure; report request ID |
 | 503 | Invitation creation requires enabled email delivery |

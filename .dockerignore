@@ -17,3 +17,6 @@ e2e
 backups
 *.dump
 .openapi-venv
+verification
+dist
+**/__pycache__

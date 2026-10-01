@@ -1,6 +1,6 @@
 {
   "name": "orbit-browser-verification",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Development-only browser regression checks for the Spring Boot Orbit product",
   "type": "module",

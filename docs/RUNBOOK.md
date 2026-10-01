@@ -2,12 +2,12 @@
 
 ## Release checklist
 
-- Run `./mvnw verify` and `./mvnw -Ppostgres-tests verify`; the latter uses Docker or a dedicated test database. Confirm tests ran rather than being skipped.
+- Run `./mvnw -Ppostgres-tests verify` for both H2 and PostgreSQL in one invocation, using Docker or a dedicated test database. Confirm tests ran rather than being skipped; a preceding plain `verify` repeats H2 unnecessarily.
 - Inspect the unconditional Trivy runtime OS/Java scan and CycloneDX SBOM. Selected HIGH/CRITICAL findings fail CI, including unfixed findings. Review remaining lower-severity CVEs and alternate-source ratings; Trivy normally prefers distro vendor severity. Update vulnerable packages; do not treat an optional OWASP skip or a successful build as zero vulnerabilities.
-- Build the application image and record/pin its tested digest. CI action sources are pinned to verified official release commits; review Dependabot updates before refreshing them.
+- Use the exact release image digest, executable, checksums, and signed provenance from the [release guide](RELEASE.md). The version pipeline promotes the tested image without rebuilding; do not substitute an unverified local rebuild. CI action sources are pinned to verified official release commits; review Dependabot updates before refreshing them. Verify registry access explicitly; a new GHCR package may be private.
 - Use the `prod` profile, secret-injected database credentials, secure cookies, and HTTPS. Set the HTTPS public link origin, SMTP sender/credentials, and a protected 32-byte outbox encryption key. Keep the application behind a trusted ingress and management endpoints private.
 - Decide whether public registration is acceptable with `ORBIT_REGISTRATION_ENABLED`. Add shared signup/login/recovery throttling and controlled email delivery. Account verification, password recovery, and session revocation are implemented; MFA/SSO remain extensions.
-- Restore a representative database backup into isolation and verify memberships, projects, tasks, comments, activity, token state, and encrypted outbox recovery. Recovered sessions are purged by default. Record recovery time and recovery-point expectations.
+- Restore a representative database backup into isolation and verify memberships, projects, tasks, private saved views, comments, activity, token state, and encrypted outbox recovery. Recovered sessions are purged by default. Record recovery time and recovery-point expectations.
 - Measure representative workspace sizes and traffic. Set application memory/CPU limits, database connection budgets, ingress body/time limits, and alerts from observed behavior.
 - Verify deployed cookies, session rotation, logout, CSRF rejection, owner/viewer access, and cross-workspace isolation over the real TLS route.
 - Set privacy/retention policies and a support plan for accounts with unreachable email addresses. Account/workspace deletion and automated token/security-event/notification retention are not implemented.

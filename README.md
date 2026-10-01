@@ -1,6 +1,6 @@
 # Orbit
 
-Orbit is a collaborative project workspace built with **Java 17 and Spring Boot 4.1.1**. Its browser and transactional API ship in one JAR. Organize projects, assign work, discuss tasks, manage access, and review activity. Screens use the real API; changes persist across reloads/restarts.
+Orbit **1.1.0** is a collaborative project workspace built with **Java 17 and Spring Boot 4.1.1**. Its browser and transactional API ship in one JAR. Organize projects, assign work, discuss tasks, manage access, and review activity. Screens use the real API; changes persist across reloads/restarts.
 
 PostgreSQL is the production database; persistent H2 supports immediate local use. Spring serves HTML/CSS/JavaScript: **no Node.js build, CDN, or separate frontend server is required**. Optional tools support browser/format checks. Customer rollout requires security review, capacity planning, backups, and operational ownership.
 
@@ -11,25 +11,27 @@ PostgreSQL is the production database; persistent H2 supports immediate local us
 | Workspaces | Create/switch independent workspaces; owners rename with conflict protection. |
 | Overview | Review total, completed, in-progress, and overdue work; inspect project progress, deadlines, and recent activity. |
 | Projects | Create and edit named, colored projects; review task progress; archive finished initiatives. |
-| Tasks | Switch board/list views; edit descriptions, status, priority, assignee, project, and deadline; delete with confirmation. |
-| Search | Combine literal text search with status, priority, project, and assignee filters; navigate paged results. |
+| Tasks | Switch board/list views; edit descriptions, status, priority, assignee, project, and deadline; select tasks for atomic status/priority/assignment changes; delete with confirmation. |
+| Search | Combine literal search with status, priority, project, and assignee; use all-tasks/assigned-to-me shortcuts, private saved views, paged results, and shareable filter/layout URLs. |
 | Discussion | Add comments with author identity/time and revisit them in task details. |
 | Team | Add registered accounts, change roles/remove access, or send expiring email invitations with acceptance history. |
 | Account | Edit display name; verify email; recover/change passwords; inspect/revoke active sessions. |
 | Notifications | Assignment/comment/access inbox, unread count, individual/all read controls, and workspace/task links. |
 | Activity/export | Browse activity history and download workspace tasks as spreadsheet-safe CSV. |
-| Browser | Responsive desktop/mobile navigation, labeled forms, keyboard-accessible dialogs, and loading, empty, error, and conflict states. |
+| Browser | Responsive navigation and bulk controls, labeled forms/dialogs, keyboard command palette, optional shortcuts, and loading, empty, error, and conflict states. |
 
-Statuses are `BACKLOG`, `TODO`, `IN_PROGRESS`, `IN_REVIEW`, `DONE`; priorities are `LOW`, `MEDIUM`, `HIGH`, `URGENT`. Tasks require a project; assignee/deadline are optional. Overdue counts use the UTC date. Archived projects remain editable and can be restored. Boards use status selectors, initially loading 50 filtered tasks with **Load more**; lane counts describe loaded results. CSV exports every workspace task regardless of filters.
+Statuses are `BACKLOG`, `TODO`, `IN_PROGRESS`, `IN_REVIEW`, `DONE`; priorities are `LOW`, `MEDIUM`, `HIGH`, `URGENT`. Tasks require a project; assignee/deadline are optional. Overdue counts use the UTC date. Archived projects remain editable and can be restored. Boards use status selectors, initially loading 50 filtered tasks with **Load more**; lane counts describe loaded results. Bulk selection covers loaded tasks, at most 100, and does not select every matching record in the database. CSV exports every workspace task regardless of filters.
 
 ### First-session walkthrough
 
 1. Start Orbit and choose the demo entry, or register an account. The browser completes sign-in and offers workspace creation; registration alone does neither automatically through the API.
 2. Open **Overview**, inspect progress, then select or create a project with a name, description, and color.
-3. In **My workspace**, create work and choose its project, status, priority, assignee, and optional deadline. Switch views and try search/filters.
+3. In **My workspace**, create work and choose its project, status, priority, assignee, and optional deadline. Try board/list filters, save a private view, and select loaded tasks to apply several changes together. A stale bulk version changes none of the selected tasks; refresh and reselect.
 4. Open task details, edit the task, and add a comment. Reload and reopen it to verify persistence.
 5. An owner can add a registered email immediately or invite an address through configured email. Invitations expire in seven days; the recipient must sign in with the matching email. MEMBER collaborates; VIEWER reads.
 6. Review **Activity**, export tasks, or open **Notifications**. Links restore the workspace and open task after reload. Owners can rename workspace settings; account settings manage display name, passwords, and sessions.
+
+Use Ctrl/Cmd+K for the command palette: search workspace tasks, jump to sections/private views, or create work. Task search shows up to eight matches with access to the full search. Arrow keys/Enter/Escape navigate it. Optional `N`, `/`, and `?` shortcuts respect typing/modal contexts and can be disabled in Help; the preference persists. Saved views belong to their creator, including viewers, with an 80-character label and a limit of 100 per user/workspace. Rename, replace filters, apply, or delete them; workspace owners cannot inspect another member's private view.
 
 ## Requirements and quickstart
 
@@ -172,10 +174,10 @@ $env:DB_USERNAME = 'orbit'
 $env:ORBIT_SESSION_SECURE = 'true'
 $env:ORBIT_PUBLIC_BASE_URL = 'https://orbit.example.com'
 # Supply required SMTP variables and the outbox key through secret injection.
-java -jar .\target\orbit-1.0.0.jar
+java -jar .\target\orbit-1.1.0.jar
 ```
 
-On Linux, supply these variables through your service manager before `java -jar target/orbit-1.0.0.jar`. Configure database certificate trust. Flyway applies migrations at startup; stricter runtime privileges require a separate migration step.
+On Linux, supply these variables through your service manager before `java -jar target/orbit-1.1.0.jar`. Configure database certificate trust. Flyway applies migrations at startup; stricter runtime privileges require a separate migration step.
 
 ## Source layout and architecture
 
@@ -236,7 +238,10 @@ Workspace-relative paths start with `/api/workspaces/{workspaceId}`. Every write
 | `/members`, `/members/{userId}` | GET/POST members; PATCH role; DELETE membership. |
 | `/projects`, `/projects/{projectId}` | GET/POST projects; PATCH project. |
 | `/tasks`, `/tasks/{taskId}` | GET/POST tasks; GET/PATCH/DELETE task. |
+| `/tasks/bulk` | POST atomic status/priority/assignment changes for 1–100 task IDs with their exact current version map; OWNER/MEMBER. |
 | `/tasks/{taskId}/comments` | GET/POST comments. |
+| `/saved-views` | GET own private views; POST label and filters; any current member, including VIEWER. |
+| `/saved-views/{viewId}` | GET/PATCH/DELETE own private view; PATCH replaces filters with current version; foreign owners' IDs return 404. |
 | `/overview`, `/activity`, `/export` | GET dashboard, paged activity, or CSV. |
 | `/api/invitations/{preview,accept}` | Token preview and email-bound acceptance. |
 | `/api/notifications` | Paged inbox and scoped read/all-read mutations. |
@@ -253,34 +258,35 @@ Workspace-relative paths start with `/api/workspaces/{workspaceId}`. Every write
 }
 ```
 
-PATCH requires the complete editable object and current numeric `version`, rather than JSON Merge Patch. DELETE requires `?version=N`. Atomic comparison/increment prevents silent overwrites; stale edits receive **409**. Reload and reconcile before resubmitting.
+Task PATCH requires the complete editable object and current numeric `version`, rather than JSON Merge Patch. Task DELETE requires `?version=N`. Atomic comparison/increment prevents silent overwrites; stale edits receive **409**. Bulk mutation validates every selected version and changes none if any ID/version is invalid. Private-view PATCH replaces all filters using its version; omitted/null filters clear them. Reload and reconcile before resubmitting.
 
 Task queries support `q`, `status`, `priority`, `projectId`, `assigneeId`, `page`, and `size`. Search is literal and case-insensitive, including `%`, `_`, and `!`. Pages start at zero; sizes are 1–100 with task/activity/inbox defaults 50/30/30. The envelope is `{items,page,size,total,totalPages}`; inbox adds `unreadCount`. Concurrent writes can move records between requests. Creates/comments lack idempotency keys, so blind retries may duplicate data.
 
-ProblemDetail-style errors include `status`, `title`, `detail`, and `requestId`; validation can add `errors`. Responses carry `X-Request-ID`. Statuses include 400 input, 401 unauthenticated, 403 role/CSRF/verification, 404 absent/inaccessible, 409 conflict, 413 oversized body, 429 authentication/invitation limits, and 503 invitations without mail. The auth limiter supplies `Retry-After`. Unexpected failures return generic 500 details.
+ProblemDetail-style errors include `status`, `title`, `detail`, and `requestId`; validation can add `errors`. Responses carry `X-Request-ID`. Statuses include 400 input, 401 unauthenticated, 403 role/CSRF/verification, 404 absent/inaccessible, 405 method (with `Allow`), 406 unacceptable response media, 409 conflict, 413 oversized body, 415 unsupported request media, 429 authentication/invitation limits, and 503 invitations without mail. JSON mutation bodies require `Content-Type: application/json`. The auth limiter supplies `Retry-After`. Unexpected failures return generic 500 details.
 
 ## Verification and developer tools
 
-**55 backend test executions passed without failures or skips**: 32 H2/security/mail checks plus 23 scenarios against real PostgreSQL 17.11, including accounts and collaboration. **Six Chromium scenarios passed without skips**, including actual SMTP delivery to Mailpit. These are executed checks, not a penetration test or throughput claim.
+**73 backend test executions passed without failures or skips**: 41 H2/security/mail checks plus 32 scenarios against real PostgreSQL 17.11, including accounts, collaboration, HTTP negotiation, and productivity. **Ten Chromium flows passed without skips**, covering eight product workflows and two captured-SMTP workflows. Thirteen release guard tests passed, including source/provenance identity, registry failure handling, and checksum repeatability. Each published release records its executed browser/backend totals in `release.json`. These checks are not a penetration test or throughput claim.
 
 | Checks | Coverage |
 | --- | --- |
 | Backend | Real filters/cookies, CSRF, rotation/logout, input validation, tenant isolation, roles, stale versions, assignment removal, comments, overview, literal search/paging, CSV, and abuse controls. |
 | Account/mail | Verification/recovery, token expiry/single-use/cooldowns, legacy sessions, all-session revocation, encrypted outbox/retries. |
-| PostgreSQL | Original eight workflows, eight account and seven collaboration scenarios, real migrations. |
+| PostgreSQL | Shared workflow, account, collaboration, and productivity scenarios with real migrations. |
 | Collaboration | Settings/roles, invite email binding/reissue/revocation/expiry/concurrency, scoped notification audiences. |
+| Productivity | Atomic bulk changes, scoped IDs/current versions, private saved-view ownership, viewer access, limits, and removal cleanup. |
 | Desktop | Task creation, assignment, date/status/priority edits, comments, reload persistence, and deletion. |
 | Mobile | Signup, workspace/project creation, navigation/overflow, reload, and subsequent sign-in. |
 | Browser lifecycle | Profile/workspace rename, session revocation/password change, notification links/reload, captured verification/reset/invitation email. |
 
-Production Compose passed required verification through captured SMTP, password reset/session revocation, and task/comment persistence with the unchanged session after app-only restart. Secure/HttpOnly/Lax defaults, UID 10001, read-only filesystem, readiness/liveness, disabled demo, and private management were checked. Functional HTTP checks explicitly disabled Secure only in that isolated fixture after confirming its default.
+An isolated 1.1.0 production image passed required verification through captured SMTP, password reset/session revocation, and task/comment/bulk/private-view persistence with unchanged session after app-only restart. Saved-view filters and task/view versions were checked exactly. Secure/HttpOnly/Lax defaults, UID 10001, read-only filesystem, readiness/liveness, disabled demo, and private management were checked. Functional HTTP checks explicitly disabled Secure only in that isolated fixture after confirming its default.
 
 ```powershell
 .\mvnw.cmd verify
 .\mvnw.cmd -Ppostgres-tests verify
 ```
 
-Use `./mvnw` on Linux/macOS. The PostgreSQL profile uses an isolated PostgreSQL 17 Testcontainers container. Missing Docker does not silently select H2. Reports are in `target/surefire-reports/` and `target/failsafe-reports/`.
+Use `./mvnw` on Linux/macOS. Choose plain `verify` for H2 alone, or `-Ppostgres-tests verify` to run both suites in one invocation; running both commands repeats H2. The PostgreSQL profile uses an isolated PostgreSQL 17 Testcontainers container. Missing Docker does not silently select H2. Reports are in `target/surefire-reports/` and `target/failsafe-reports/`.
 
 For a dedicated disposable database instead of Docker:
 
@@ -304,15 +310,15 @@ npm run format:check
 npm run format
 ```
 
-Linux may need `npx playwright install --with-deps chromium`. Playwright starts the local JAR or reuses a server outside CI. `ORBIT_BASE_URL` selects a disposable alternate server; `ORBIT_BROWSER_EXECUTABLE` selects installed Chromium. Four flows always execute; two email flows require enabled SMTP and `ORBIT_MAILPIT_URL`, otherwise explicitly skip. CI enables the sink and runs all six. Tests retain accounts/workspaces: use disposable data. Failure traces can contain test credentials/links; protect `test-results/`. See [browser guidance](e2e/README.md).
+Linux may need `npx playwright install --with-deps chromium`. Playwright resolves the executable from the current POM or reuses a server outside CI. `ORBIT_BASE_URL` selects a disposable alternate server; `ORBIT_BROWSER_EXECUTABLE` selects installed Chromium. Email scenarios require enabled SMTP and `ORBIT_MAILPIT_URL`, otherwise explicitly skip. CI enables the sink and rejects skips/retries in its verification summary. Tests retain accounts/workspaces: use disposable data. Failure traces can contain test credentials/links; protect `test-results/`. See [browser guidance](e2e/README.md).
 
 ## Security and known limits
 
 | Role | Permissions |
 | --- | --- |
-| OWNER | Read/export, edit projects/tasks, delete tasks, comment, manage membership/invitations/settings. |
-| MEMBER | Read/export, create/edit projects and tasks, delete tasks, add comments. |
-| VIEWER | Read/export only. |
+| OWNER | Read/export, edit/bulk-update/delete tasks, comment, manage membership/invitations/settings, maintain own private views. |
+| MEMBER | Read/export, create/edit projects and tasks, bulk-update/delete tasks, add comments, maintain own private views. |
+| VIEWER | Read/export shared work and maintain own private views. |
 
 Initial membership accepts MEMBER/VIEWER; owners may promote existing members. Self-demotion and deleting owner membership return 409. Each request checks current database membership; foreign resource IDs are rejected. Inaccessible workspaces use 404 to avoid disclosure.
 
@@ -354,19 +360,20 @@ Applied migrations are immutable: add a version rather than editing history. Bac
 
 ## CI, release workflow, and documentation
 
-CI runs Java/PostgreSQL verification, OpenAPI validation, an isolated Linux recovery drill, six Chromium scenarios with Mailpit, formatting, and an image build. Trivy scans packaged Java and OS dependencies, publishes a CycloneDX SBOM/report, and fails selected HIGH/CRITICAL findings including unfixed ones. The final combined image passed locally without suppressions. Trivy normally uses vendor severity; the full SBOM retains lower-severity CVEs and alternate-source ratings. A passing gate does not mean zero vulnerabilities. See [severity selection](https://trivy.dev/docs/latest/guide/scanner/vulnerability/).
+CI runs on pull requests, weekly schedules, and manual requests; ordinary branch/main pushes do not duplicate the full pipeline. The required `verify` and `dependency-review` jobs keep their names. Shared verification runs H2/PostgreSQL once, validates OpenAPI, exercises isolated Linux recovery and all Chromium scenarios with Mailpit, checks formatting, packages the tested JAR into a runtime image, and probes production behavior. Trivy scans packaged Java and OS dependencies, publishes a CycloneDX SBOM/report, and fails selected HIGH/CRITICAL findings including unfixed ones. Trivy normally uses vendor severity; the full SBOM retains lower-severity CVEs and alternate-source ratings. A passing gate does not mean zero vulnerabilities. See [severity selection](https://trivy.dev/docs/latest/guide/scanner/vulnerability/).
 
 PR dependency review rejects new high/critical findings including development scopes; enable the dependency graph and supported private-repository security configuration. Optional OWASP runs with `NVD_API_KEY`, failing at CVSS 7; otherwise it explicitly skips while Trivy still runs. OWASP has not been run locally. Passing builds do not prove completed remote checks. Dependabot checks Maven, npm, Python validation tools, actions, Dockerfile images, and Compose images weekly. Java 17 and PostgreSQL 17 remain deliberate baselines: major Temurin/PostgreSQL image updates are ignored and require a compatibility/data migration review; minor and patch updates remain eligible.
 
 The reference repository protects `main`: changes require a pull request, an up-to-date branch, passing `verify` and `dependency-review` checks, and resolved review conversations. Force pushes and branch deletion are disabled; these rules apply to administrators. Separate approval votes are not required.
 
-Release through a focused reviewed PR with relevant checks. CI actions are pinned to verified release commits with version comments; Dependabot maintains them. Review migrations/security, record the tested image digest, and deploy with secrets/TLS, a backup, measured limits, and rollback ownership. Verify the deployed browser flow and recovery procedure.
+Release through focused reviewed PRs, then an exact POM-matching version tag on main ancestry. The release pipeline runs fresh complete verification and promotes the same tested image into version/full-commit GHCR tags without rebuilding. It publishes the executable, tracked source ZIP, SBOM, vulnerability report, manifest, checksums, and GitHub OIDC provenance. Manual dispatch requires a tag at the current main tip so signed source identity remains exact. Registry tags are never overwritten by the workflow; deploy by the manifest digest. New GHCR packages may be private until the owner configures visibility and verifies anonymous access. See [release and verification instructions](docs/RELEASE.md). Publishing these artifacts does not deploy a public application.
 
 - [API guide](docs/API.md): exact fields, validation, roles, paging, errors.
 - [OpenAPI contract](api/openapi.yaml): validated machine-readable operations/schemas.
 - [Account/email security](docs/ACCOUNT_SECURITY.md): verification migration, recovery, sessions, SMTP/key operations.
 - [Architecture](docs/ARCHITECTURE.md): modules, relationships, transactions, sessions.
 - [Runbook](docs/RUNBOOK.md): rollout, ingress, monitoring, backup/restore, incidents.
+- [Release guide](docs/RELEASE.md): exact tags, production gates, GHCR access, manifest/checksum/provenance verification, and rollback.
 - [Backup/recovery tools](scripts/README.md): safe Windows/Linux commands and limitations.
 - [Browser checks](e2e/README.md): test data, browser selection, traces, cleanup.
 

@@ -107,11 +107,11 @@ $env:ORBIT_MAIL_PORT = '1025'
 $env:ORBIT_MAIL_STARTTLS = 'false'
 $env:ORBIT_MAIL_FROM = 'orbit@example.test'
 # Set ORBIT_MAIL_ENCRYPTION_KEY to a fresh test-only 32-byte Base64 key.
-java -jar .\target\orbit-1.0.0.jar `
+java -jar .\target\orbit-1.1.0.jar `
   --spring.profiles.active=local `
   --orbit.accounts.public-base-url=http://127.0.0.1:8080
 ```
 
-Linux/macOS use the same variables with `export`, then `java -jar target/orbit-1.0.0.jar --spring.profiles.active=local --orbit.accounts.public-base-url=http://127.0.0.1:8080`. The direct public-origin argument also makes alternate local ports explicit. Use disposable accounts and data. Disable STARTTLS only for this isolated sink; production keeps it enabled. Stop the sink with `docker compose -f compose.dev.yaml down`.
+Linux/macOS use the same variables with `export`, then `java -jar target/orbit-1.1.0.jar --spring.profiles.active=local --orbit.accounts.public-base-url=http://127.0.0.1:8080`. The direct public-origin argument also makes alternate local ports explicit. Use disposable accounts and data. Disable STARTTLS only for this isolated sink; production keeps it enabled. Stop the sink with `docker compose -f compose.dev.yaml down`.
 
 Before activating a recovered database, revoke restored sessions and outstanding account tokens as appropriate, review the mail outbox, and keep SMTP disabled until replay is deliberately approved. Restore verification should use an isolated database with no public traffic or external mail. See [RUNBOOK.md](RUNBOOK.md) for recovery and deployment controls.

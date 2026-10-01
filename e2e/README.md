@@ -52,4 +52,3 @@ Each run uses unique record names. The desktop and notification tests attempt ta
 Use `npm run test:e2e:headed` for visible debugging and `npm run format:check` to check frontend and test source formatting.
 
 Failures retain screenshots and traces under `test-results/`. Inspect a trace with `npx playwright show-trace <trace.zip>`. Traces can contain test session data and email-token URLs; keep them within the test environment. The runner does not print captured email bodies or tokens in assertions.
-
